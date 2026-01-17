@@ -1,1 +1,6 @@
 **/.env
+**/.claude/
+**/venv
+**/build/
+**/*.pt
+**/__pycache__/

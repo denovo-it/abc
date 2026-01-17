@@ -1,0 +1,518 @@
+make[1]: Entering directory '/home/orangepi/abc/software/voyager-sdk/operators'
+rm -rf Release /home/orangepi/abc/software/voyager-sdk/operators/lib  onnxruntime/onnxruntime-linux-aarch64-1.17.1 onnxruntime/onnxruntime-linux-aarch64-1.17.1.tgz onnxruntime/onnxruntime
+make[1]: Leaving directory '/home/orangepi/abc/software/voyager-sdk/operators'
+make[1]: Entering directory '/home/orangepi/abc/software/voyager-sdk/trackers'
+rm -rf Debug Release
+make[1]: Leaving directory '/home/orangepi/abc/software/voyager-sdk/trackers'
+make[1]: Entering directory '/home/orangepi/abc/software/voyager-sdk/examples'
+rm -rf Release
+make[1]: Leaving directory '/home/orangepi/abc/software/voyager-sdk/examples'
+make -C operators
+make[1]: Entering directory '/home/orangepi/abc/software/voyager-sdk/operators'
+mkdir -p onnxruntime
+(cd onnxruntime && wget https://github.com/microsoft/onnxruntime/releases/download/v1.17.1/onnxruntime-linux-aarch64-1.17.1.tgz && tar -xzf onnxruntime-linux-aarch64-1.17.1.tgz)  || (cd .. && 	rm -rf Release /home/orangepi/abc/software/voyager-sdk/operators/lib  onnxruntime/onnxruntime-linux-aarch64-1.17.1 onnxruntime/onnxruntime-linux-aarch64-1.17.1.tgz onnxruntime/onnxruntime && exit 1)
+--2026-01-17 20:13:03--  https://github.com/microsoft/onnxruntime/releases/download/v1.17.1/onnxruntime-linux-aarch64-1.17.1.tgz
+Resolving github.com (github.com)... 140.82.121.4
+Connecting to github.com (github.com)|140.82.121.4|:443... connected.
+HTTP request sent, awaiting response... 302 Found
+Location: https://release-assets.githubusercontent.com/github-production-release-asset/156939672/115b3fdc-8b9c-424a-b84a-84156b920784?sp=r&sv=2018-11-09&sr=b&spr=https&se=2026-01-17T19%3A58%3A17Z&rscd=attachment%3B+filename%3Donnxruntime-linux-aarch64-1.17.1.tgz&rsct=application%2Foctet-stream&skoid=96c2d410-5711-43a1-aedd-ab1947aa7ab0&sktid=398a6654-997b-47e9-b12b-9515b896b4de&skt=2026-01-17T18%3A58%3A07Z&ske=2026-01-17T19%3A58%3A17Z&sks=b&skv=2018-11-09&sig=h3QfuQ4Rn%2Fo8U4f7f2gRBRlVBmyLmDz9ogTboEteZGI%3D&jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmVsZWFzZS1hc3NldHMuZ2l0aHVidXNlcmNvbnRlbnQuY29tIiwia2V5Ijoia2V5MSIsImV4cCI6MTc2ODY3NzQ4NCwibmJmIjoxNzY4Njc3MTg0LCJwYXRoIjoicmVsZWFzZWFzc2V0cHJvZHVjdGlvbi5ibG9iLmNvcmUud2luZG93cy5uZXQifQ.BzBeprHqHJUf1A54YY677tH86Qlj_rEvM8wsBdn_cAI&response-content-disposition=attachment%3B%20filename%3Donnxruntime-linux-aarch64-1.17.1.tgz&response-content-type=application%2Foctet-stream [following]
+--2026-01-17 20:13:04--  https://release-assets.githubusercontent.com/github-production-release-asset/156939672/115b3fdc-8b9c-424a-b84a-84156b920784?sp=r&sv=2018-11-09&sr=b&spr=https&se=2026-01-17T19%3A58%3A17Z&rscd=attachment%3B+filename%3Donnxruntime-linux-aarch64-1.17.1.tgz&rsct=application%2Foctet-stream&skoid=96c2d410-5711-43a1-aedd-ab1947aa7ab0&sktid=398a6654-997b-47e9-b12b-9515b896b4de&skt=2026-01-17T18%3A58%3A07Z&ske=2026-01-17T19%3A58%3A17Z&sks=b&skv=2018-11-09&sig=h3QfuQ4Rn%2Fo8U4f7f2gRBRlVBmyLmDz9ogTboEteZGI%3D&jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmVsZWFzZS1hc3NldHMuZ2l0aHVidXNlcmNvbnRlbnQuY29tIiwia2V5Ijoia2V5MSIsImV4cCI6MTc2ODY3NzQ4NCwibmJmIjoxNzY4Njc3MTg0LCJwYXRoIjoicmVsZWFzZWFzc2V0cHJvZHVjdGlvbi5ibG9iLmNvcmUud2luZG93cy5uZXQifQ.BzBeprHqHJUf1A54YY677tH86Qlj_rEvM8wsBdn_cAI&response-content-disposition=attachment%3B%20filename%3Donnxruntime-linux-aarch64-1.17.1.tgz&response-content-type=application%2Foctet-stream
+Resolving release-assets.githubusercontent.com (release-assets.githubusercontent.com)... 185.199.111.133, 185.199.110.133, 185.199.108.133, ...
+Connecting to release-assets.githubusercontent.com (release-assets.githubusercontent.com)|185.199.111.133|:443... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 4916127 (4.7M) [application/octet-stream]
+Saving to: ‘onnxruntime-linux-aarch64-1.17.1.tgz’
+
+     0K .......... .......... .......... .......... ..........  1% 2.18M 2s
+    50K .......... .......... .......... .......... ..........  2% 2.42M 2s
+   100K .......... .......... .......... .......... ..........  3% 4.42M 2s
+   150K .......... .......... .......... .......... ..........  4% 11.4M 1s
+   200K .......... .......... .......... .......... ..........  5% 9.52M 1s
+   250K .......... .......... .......... .......... ..........  6% 6.14M 1s
+   300K .......... .......... .......... .......... ..........  7% 3.57M 1s
+   350K .......... .......... .......... .......... ..........  8% 7.27M 1s
+   400K .......... .......... .......... .......... ..........  9% 6.36M 1s
+   450K .......... .......... .......... .......... .......... 10% 3.90M 1s
+   500K .......... .......... .......... .......... .......... 11% 41.5M 1s
+   550K .......... .......... .......... .......... .......... 12% 6.67M 1s
+   600K .......... .......... .......... .......... .......... 13% 13.2M 1s
+   650K .......... .......... .......... .......... .......... 14% 7.05M 1s
+   700K .......... .......... .......... .......... .......... 15% 5.60M 1s
+   750K .......... .......... .......... .......... .......... 16% 6.84M 1s
+   800K .......... .......... .......... .......... .......... 17% 4.40M 1s
+   850K .......... .......... .......... .......... .......... 18% 10.5M 1s
+   900K .......... .......... .......... .......... .......... 19% 9.29M 1s
+   950K .......... .......... .......... .......... .......... 20% 5.24M 1s
+  1000K .......... .......... .......... .......... .......... 21% 10.1M 1s
+  1050K .......... .......... .......... .......... .......... 22% 7.36M 1s
+  1100K .......... .......... .......... .......... .......... 23% 7.66M 1s
+  1150K .......... .......... .......... .......... .......... 24% 2.93M 1s
+  1200K .......... .......... .......... .......... .......... 26% 8.33M 1s
+  1250K .......... .......... .......... .......... .......... 27% 6.49M 1s
+  1300K .......... .......... .......... .......... .......... 28% 6.72M 1s
+  1350K .......... .......... .......... .......... .......... 29% 10.3M 1s
+  1400K .......... .......... .......... .......... .......... 30% 2.87M 1s
+  1450K .......... .......... .......... .......... .......... 31% 6.35M 1s
+  1500K .......... .......... .......... .......... .......... 32% 5.25M 1s
+  1550K .......... .......... .......... .......... .......... 33% 15.7M 1s
+  1600K .......... .......... .......... .......... .......... 34% 10.3M 1s
+  1650K .......... .......... .......... .......... .......... 35% 10.2M 1s
+  1700K .......... .......... .......... .......... .......... 36% 13.7M 1s
+  1750K .......... .......... .......... .......... .......... 37% 8.70M 0s
+  1800K .......... .......... .......... .......... .......... 38% 13.7M 0s
+  1850K .......... .......... .......... .......... .......... 39% 5.25M 0s
+  1900K .......... .......... .......... .......... .......... 40% 4.63M 0s
+  1950K .......... .......... .......... .......... .......... 41% 18.7M 0s
+  2000K .......... .......... .......... .......... .......... 42% 11.6M 0s
+  2050K .......... .......... .......... .......... .......... 43% 10.3M 0s
+  2100K .......... .......... .......... .......... .......... 44% 9.09M 0s
+  2150K .......... .......... .......... .......... .......... 45% 9.44M 0s
+  2200K .......... .......... .......... .......... .......... 46% 6.72M 0s
+  2250K .......... .......... .......... .......... .......... 47% 22.6M 0s
+  2300K .......... .......... .......... .......... .......... 48% 14.6M 0s
+  2350K .......... .......... .......... .......... .......... 49% 8.27M 0s
+  2400K .......... .......... .......... .......... .......... 51% 8.04M 0s
+  2450K .......... .......... .......... .......... .......... 52% 11.5M 0s
+  2500K .......... .......... .......... .......... .......... 53% 10.1M 0s
+  2550K .......... .......... .......... .......... .......... 54% 11.5M 0s
+  2600K .......... .......... .......... .......... .......... 55% 11.1M 0s
+  2650K .......... .......... .......... .......... .......... 56% 4.51M 0s
+  2700K .......... .......... .......... .......... .......... 57% 5.26M 0s
+  2750K .......... .......... .......... .......... .......... 58% 8.07M 0s
+  2800K .......... .......... .......... .......... .......... 59% 23.7M 0s
+  2850K .......... .......... .......... .......... .......... 60% 7.65M 0s
+  2900K .......... .......... .......... .......... .......... 61% 11.5M 0s
+  2950K .......... .......... .......... .......... .......... 62% 11.1M 0s
+  3000K .......... .......... .......... .......... .......... 63% 10.9M 0s
+  3050K .......... .......... .......... .......... .......... 64% 13.6M 0s
+  3100K .......... .......... .......... .......... .......... 65% 10.6M 0s
+  3150K .......... .......... .......... .......... .......... 66% 8.37M 0s
+  3200K .......... .......... .......... .......... .......... 67% 14.0M 0s
+  3250K .......... .......... .......... .......... .......... 68% 11.5M 0s
+  3300K .......... .......... .......... .......... .......... 69% 1.62M 0s
+  3350K .......... .......... .......... .......... .......... 70% 4.38M 0s
+  3400K .......... .......... .......... .......... .......... 71% 10.4M 0s
+  3450K .......... .......... .......... .......... .......... 72% 15.1M 0s
+  3500K .......... .......... .......... .......... .......... 73% 9.79M 0s
+  3550K .......... .......... .......... .......... .......... 74% 7.56M 0s
+  3600K .......... .......... .......... .......... .......... 76% 8.15M 0s
+  3650K .......... .......... .......... .......... .......... 77% 10.8M 0s
+  3700K .......... .......... .......... .......... .......... 78% 11.1M 0s
+  3750K .......... .......... .......... .......... .......... 79% 11.1M 0s
+  3800K .......... .......... .......... .......... .......... 80% 12.4M 0s
+  3850K .......... .......... .......... .......... .......... 81% 6.90M 0s
+  3900K .......... .......... .......... .......... .......... 82% 8.14M 0s
+  3950K .......... .......... .......... .......... .......... 83% 9.16M 0s
+  4000K .......... .......... .......... .......... .......... 84% 11.8M 0s
+  4050K .......... .......... .......... .......... .......... 85% 6.11M 0s
+  4100K .......... .......... .......... .......... .......... 86% 10.7M 0s
+  4150K .......... .......... .......... .......... .......... 87% 4.97M 0s
+  4200K .......... .......... .......... .......... .......... 88% 9.99M 0s
+  4250K .......... .......... .......... .......... .......... 89% 10.9M 0s
+  4300K .......... .......... .......... .......... .......... 90% 14.9M 0s
+  4350K .......... .......... .......... .......... .......... 91% 8.00M 0s
+  4400K .......... .......... .......... .......... .......... 92% 12.3M 0s
+  4450K .......... .......... .......... .......... .......... 93% 12.9M 0s
+  4500K .......... .......... .......... .......... .......... 94% 7.54M 0s
+  4550K .......... .......... .......... .......... .......... 95% 4.84M 0s
+  4600K .......... .......... .......... .......... .......... 96% 1.80M 0s
+  4650K .......... .......... .......... .......... .......... 97% 14.0M 0s
+  4700K .......... .......... .......... .......... .......... 98% 11.0M 0s
+  4750K .......... .......... .......... .......... .......... 99% 9.95M 0s
+  4800K                                                       100% 1.69T=0.7s
+
+2026-01-17 20:13:04 (7.08 MB/s) - ‘onnxruntime-linux-aarch64-1.17.1.tgz’ saved [4916127/4916127]
+
+ln -snf onnxruntime-linux-aarch64-1.17.1 onnxruntime/onnxruntime
+mkdir -p lib
+for lib in onnxruntime/onnxruntime/lib/*; do ln -snf "../${lib}" lib; done
+mkdir -p Release
+cd Release && PKG_CONFIG_PATH=/opt/axelera/runtime-1.5.2-1/lib/pkgconfig:/opt/axelera/runtime-1.5.2-1/lib/pkgconfig:/home/orangepi/abc/software/voyager-sdk/operators/lib/pkgconfig cmake ..  -GNinja -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/home/orangepi/abc/software/voyager-sdk/operators -DCMAKE_INSTALL_LIBDIR=lib  -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON || (cd .. && 	rm -rf Release /home/orangepi/abc/software/voyager-sdk/operators/lib  onnxruntime/onnxruntime-linux-aarch64-1.17.1 onnxruntime/onnxruntime-linux-aarch64-1.17.1.tgz onnxruntime/onnxruntime && exit 1)
+-- The C compiler identification is GNU 11.4.0
+-- The CXX compiler identification is GNU 11.4.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Found PkgConfig: /usr/bin/pkg-config (found version "0.29.2")
+-- Checking for module 'OpenCL'
+--   Found OpenCL, version 3.0
+-- Checking for module 'opencv4'
+--   Found opencv4, version 4.5.4
+-- Checking for module 'nlohmann_json'
+--   Found nlohmann_json, version 3.10.5
+-- Checking for module 'libva'
+--   No package 'libva' found
+-- Found OpenCV: /usr (found version "4.5.4")
+-- Found OpenCV: /usr (found suitable version "4.5.4", minimum required is "4")
+-- Building bytetrack
+-- Building oc_sort
+-- Checking for module 'axruntime'
+--   Found axruntime, version 0.8
+-- Checking for modules 'libavcodec;libavformat;libswscale;libavutil'
+--   Found libavcodec, version 58.134.100
+--   Found libavformat, version 58.76.100
+--   Found libswscale, version 5.9.100
+--   Found libavutil, version 56.70.100
+-- Checking for module 'gmodule-2.0'
+--   Found gmodule-2.0, version 2.72.4
+-- Checking for module 'glib-2.0'
+--   Found glib-2.0, version 2.72.4
+-- Checking for module 'gstreamer-1.0'
+--   Found gstreamer-1.0, version 1.20.3
+-- Checking for module 'gstreamer-video-1.0'
+--   Found gstreamer-video-1.0, version 1.20.3
+-- Checking for module 'glib-2.0'
+--   Found glib-2.0, version 2.72.4
+-- Checking for module 'gmodule-2.0'
+--   Found gmodule-2.0, version 2.72.4
+-- Checking for module 'gstreamer-1.0'
+--   Found gstreamer-1.0, version 1.20.3
+-- Checking for module 'gstreamer-base-1.0'
+--   Found gstreamer-base-1.0, version 1.20.3
+-- Checking for module 'gstreamer-video-1.0'
+--   Found gstreamer-video-1.0, version 1.20.3
+-- Checking for module 'gstreamer-allocators-1.0'
+--   Found gstreamer-allocators-1.0, version 1.20.3
+-- Checking for module 'opencl'
+--   No package 'opencl' found
+-- Looking for customer components in: /home/orangepi/abc/software/voyager-sdk/operators/../customers/*
+-- Found customer directory: /home/orangepi/abc/software/voyager-sdk/operators/../customers/tutorials
+-- Including customer components: tutorials
+-- Checking for module 'hailo_tappas'
+--   No package 'hailo_tappas' found
+-- Checking for module 'gsthailometa'
+--   No package 'gsthailometa' found
+-- Checking for module 'gmodule-2.0'
+--   Found gmodule-2.0, version 2.72.4
+-- Could NOT find GTest (missing: GTEST_LIBRARY GTEST_INCLUDE_DIR GTEST_MAIN_LIBRARY) 
+-- Checking for module 'gmock'
+--   No package 'gmock' found
+CMake Warning at CMakeLists.txt:382 (message):
+  Unit tests will not be run.  Please install libgtest-dev and libgmock-dev
+  to enable unit tests.
+
+
+-- Configuring done (4.4s)
+-- Generating done (0.8s)
+CMake Warning:
+  Manually-specified variables were not used by the project:
+
+    CMAKE_VERBOSE_MAKEFILE
+
+
+-- Build files have been written to: /home/orangepi/abc/software/voyager-sdk/operators/Release
+ninja -C Release install
+ninja: Entering directory `Release'
+[1/176] Building CXX object CMakeFiles/inplace_addstreamid.dir/src/AxInPlaceAddStreamId.cpp.o
+[2/176] Building CXX object CMakeFiles/decode_faciallandmarks.dir/src/AxDecodeLandmarks.cpp.o
+[3/176] Building CXX object CMakeFiles/decode_faceboxes.dir/src/AxDecodeFaceBoxes.cpp.o
+[4/176] Building CXX object CMakeFiles/decode_classification.dir/src/AxDecodeClassification.cpp.o
+[5/176] Building CXX object CMakeFiles/decode_ctc.dir/src/AxDecodeCTC.cpp.o
+[6/176] Building CXX object CMakeFiles/trackerfilter_numsubtaskruns.dir/src/AxTrackerFilterNumSubtaskRuns.cpp.o
+[7/176] Building CXX object CMakeFiles/decode_rtmdet.dir/src/AxDecodeRtmDet.cpp.o
+[8/176] Building CXX object CMakeFiles/decode_facerec.dir/src/AxDecodeFaceRec.cpp.o
+[9/176] Building CXX object CMakeFiles/decode_retinaface.dir/src/AxDecodeRetinaFace.cpp.o
+[10/176] Building CXX object CMakeFiles/trackerattribute_bestscore.dir/src/AxTrackerAttributeBestScore.cpp.o
+[11/176] Building CXX object CMakeFiles/trackerattribute_mostfrequent.dir/src/AxTrackerAttributeMostFrequent.cpp.o
+[12/176] Building CXX object CMakeFiles/decode_yolo.dir/src/AxOnnxRuntimeHelper.cpp.o
+[13/176] Building CXX object CMakeFiles/decode_semantic_seg.dir/src/AxDecodeSemanticSeg.cpp.o
+[14/176] Building CXX object CMakeFiles/decode_image.dir/src/AxDecodeImage.cpp.o
+[15/176] Building CXX object CMakeFiles/decode_ssd2.dir/src/AxDecodeSsd2.cpp.o
+[16/176] Building CXX object CMakeFiles/decode_to_raw_tensor.dir/src/AxDecodeToRawTensor.cpp.o
+[17/176] Building CXX object CMakeFiles/transform_perspective_cl.dir/src/AxTransformPerspectiveCl.cpp.o
+[18/176] Building CXX object CMakeFiles/decode_yolo.dir/src/AxDecodeYolo.cpp.o
+[19/176] Building CXX object CMakeFiles/inplace_draw.dir/src/AxInPlaceDraw.cpp.o
+[20/176] Building CXX object CMakeFiles/decode_yolov5.dir/src/AxDecodeYolo5.cpp.o
+[21/176] Building CXX object CMakeFiles/inplace_addtiles.dir/src/AxInPlaceAddTiles.cpp.o
+[22/176] Building CXX object CMakeFiles/decode_yolov8.dir/src/AxDecodeYolo8.cpp.o
+[23/176] Building CXX object CMakeFiles/transform_centrecropextra.dir/src/AxTransformCentreCropExtra.cpp.o
+[24/176] Building CXX object CMakeFiles/inplace_filterdetections.dir/src/AxInPlaceFilterDetections.cpp.o
+[25/176] Building CXX object CMakeFiles/inplace_hidemeta.dir/src/AxInPlaceHideMeta.cpp.o
+[26/176] Building CXX object CMakeFiles/transform_contrastnormalize.dir/src/AxTransformContrastNormalize.cpp.o
+[27/176] Building CXX object CMakeFiles/inplace_nms.dir/src/AxInPlaceNms.cpp.o
+[28/176] Building CXX object CMakeFiles/transform_cropresize.dir/src/AxTransformCropResize.cpp.o
+[29/176] Building CXX object CMakeFiles/transform_colorconvert.dir/src/AxTransformColorConvert.cpp.o
+[30/176] Building CXX object CMakeFiles/decode_yolov10_simple.dir/src/AxDecodeYolo10Simple.cpp.o
+[31/176] Building CXX object CMakeFiles/transform_dequantize.dir/src/AxTransformDequantize.cpp.o
+[32/176] Building CXX object CMakeFiles/decode_yolox.dir/src/AxDecodeYoloX.cpp.o
+[33/176] Building CXX object CMakeFiles/transform_padding.dir/src/AxTransformPadding.cpp.o
+[34/176] Building CXX object CMakeFiles/decode_yolov_obb.dir/src/AxDecodeYoloOBB.cpp.o
+[35/176] Building CXX object CMakeFiles/transform_paddingdequantize.dir/src/AxTransformPaddingDequantize.cpp.o
+[36/176] Building CXX object CMakeFiles/transform_facealign.dir/src/AxTransformFaceAlign.cpp.o
+[37/176] Building CXX object CMakeFiles/decode_yolov8seg.dir/src/AxDecodeYolo8Seg.cpp.o
+[38/176] Building CXX object CMakeFiles/transform_resize.dir/src/AxTransformResize.cpp.o
+[39/176] Building CXX object CMakeFiles/transform_postamble.dir/src/AxOnnxRuntimeHelper.cpp.o
+[40/176] Building CXX object CMakeFiles/transform_polar.dir/src/AxTransformPolar.cpp.o
+[41/176] Building CXX object CMakeFiles/transform_totensor.dir/src/AxTransformToTensor.cpp.o
+[42/176] Building CXX object CMakeFiles/decode_facenet.dir/src/AxDecodeFacenet.cc.o
+[43/176] Building CXX object CMakeFiles/transform_roicrop.dir/src/AxTransformRoiCrop.cpp.o
+[44/176] Building CXX object CMakeFiles/transform_yolopreproc.dir/src/AxTransformYoloPreProc.cpp.o
+[45/176] Building CXX object CMakeFiles/transform_barrelcorrect_cl.dir/src/AxTransformBarrelCorrectCl.cpp.o
+[46/176] Building CXX object CMakeFiles/transform_colorconvert_cl.dir/src/AxTransformColorConvertCl.cpp.o
+[47/176] Building CXX object CMakeFiles/decode_embeddings.dir/src/AxDecodeEmbeddings.cc.o
+[48/176] Building CXX object CMakeFiles/transform_postamble.dir/src/AxTransformPostamble.cpp.o
+[49/176] Building CXX object CMakeFiles/transform_normalize_cl.dir/src/AxTransformNormalizeCl.cpp.o
+[50/176] Building CXX object PillowResize/src/PillowResize/CMakeFiles/PillowResize.dir/PillowResize.cc.o
+[51/176] Building CXX object CMakeFiles/decode_multihead.dir/src/AxDecodeMultihead.cc.o
+[52/176] Building CXX object CMakeFiles/transform_polar_cl.dir/src/AxTransformPolarCl.cpp.o
+[53/176] Building CXX object PillowResize/src/PillowResize/CMakeFiles/PillowResize.dir/ResampleSIMDVerticalConv.cc.o
+[54/176] Building CXX object CMakeFiles/inplace_normalize.dir/src/AxInPlaceNormalize.cpp.o
+[55/176] Building CXX object PillowResize/src/PillowResize/CMakeFiles/PillowResize.dir/ResampleSIMDHorizontalConv.cc.o
+[56/176] Building CXX object CMakeFiles/transform_resizeratiocropexcess.dir/src/AxTransformResizeRatioCropExcess.cpp.o
+[57/176] Building CXX object trackers/algorithms/bytetrack/CMakeFiles/bytetrack.dir/src/lapjv.cpp.o
+[58/176] Building CXX object PillowResize/src/PillowResize/CMakeFiles/PillowResize.dir/normalize_coeffs.cc.o
+[59/176] Linking CXX static library PillowResize/src/PillowResize/libPillowResize.a
+[60/176] Building CXX object CMakeFiles/transform_resize_cl.dir/src/AxTransformResizeCl.cpp.o
+[61/176] Building CXX object trackers/CMakeFiles/tracker_factory.dir/src/TrackerFactory.cpp.o
+[62/176] Building CXX object trackers/algorithms/bytetrack/CMakeFiles/bytetrack.dir/src/BYTETracker.cpp.o
+[63/176] Building CXX object trackers/algorithms/bytetrack/CMakeFiles/bytetrack.dir/src/utils.cpp.o
+[64/176] Building CXX object trackers/algorithms/oc_sort/CMakeFiles/oc_sort.dir/src/KalmanBoxTracker.cpp.o
+[65/176] Building CXX object trackers/CMakeFiles/tracker_factory.dir/src/cmc.cpp.o
+[66/176] Building CXX object trackers/algorithms/bytetrack/CMakeFiles/bytetrack.dir/src/STrack.cpp.o
+[67/176] Building CXX object trackers/axtracker/CMakeFiles/axtracker.dir/src/lapjv.cpp.o
+[68/176] Building CXX object trackers/algorithms/oc_sort/CMakeFiles/oc_sort.dir/src/lapjv.cpp.o
+[69/176] Building CXX object trackers/CMakeFiles/track.dir/src/track.cpp.o
+[70/176] Building CXX object trackers/algorithms/oc_sort/CMakeFiles/oc_sort.dir/src/Utilities.cpp.o
+[71/176] Building CXX object trackers/algorithms/bytetrack/CMakeFiles/bytetrack.dir/src/kalmanFilter.cpp.o
+[72/176] Linking CXX shared library trackers/algorithms/bytetrack/libbytetrack.so
+[73/176] Building CXX object trackers/algorithms/oc_sort/CMakeFiles/oc_sort.dir/src/OCSort.cpp.o
+[74/176] Building CXX object axstreamer/CMakeFiles/axstreamer.dir/src/AxInferenceAxRuntime.cpp.o
+[75/176] Building CXX object axstreamer/CMakeFiles/axstreamer.dir/src/AxLog.cpp.o
+[76/176] Building CXX object axstreamer/CMakeFiles/axstreamer.dir/src/AxOpenClExtensions.cpp.o
+[77/176] Building CXX object trackers/algorithms/oc_sort/CMakeFiles/oc_sort.dir/src/KalmanFilter.cpp.o
+[78/176] Building CXX object trackers/axtracker/CMakeFiles/axtracker.dir/src/trackers.cpp.o
+[79/176] Linking CXX shared library trackers/axtracker/libaxtracker.so
+[80/176] Building CXX object axstreamer/CMakeFiles/axstreamer.dir/src/AxFilterDetections.cpp.o
+[81/176] Building CXX object trackers/algorithms/oc_sort/CMakeFiles/oc_sort.dir/src/Association.cpp.o
+[82/176] Linking CXX shared library trackers/algorithms/oc_sort/liboc_sort.so
+[83/176] Linking CXX shared library trackers/libtracker_factory.so
+[84/176] Linking CXX executable trackers/track
+[85/176] Building CXX object axstreamer/CMakeFiles/axstreamer.dir/src/AxOpenCVVideoDecoder.cpp.o
+[86/176] Building CXX object axstreamer/CMakeFiles/axstreamer.dir/src/AxFFMpegVideoDecoder.cpp.o
+[87/176] Building CXX object gstaxstreamer/CMakeFiles/gstaxstreamer.dir/src/GstAlignedAllocator.cpp.o
+[88/176] Building CXX object axstreamer/CMakeFiles/axstreamer.dir/src/AxOpenCVRender.cpp.o
+[89/176] Building CXX object axstreamer/CMakeFiles/axstreamer.dir/src/AxNms.cpp.o
+[90/176] Building CXX object CMakeFiles/inplace_tracker.dir/src/AxInPlaceTracker.cpp.o
+[91/176] Building CXX object axstreamer/CMakeFiles/axstreamer.dir/src/AxInferenceNet.cpp.o
+[92/176] Building CXX object axstreamer/CMakeFiles/axstreamer.dir/src/AxOpenCl.cpp.o
+[93/176] Building CXX object gstaxstreamer/CMakeFiles/gstaxstreamer.dir/src/GstAxDataUtils.cpp.o
+[94/176] Building CXX object gstaxstreamer/CMakeFiles/gstaxstreamer.dir/src/GstAxDistributor.cpp.o
+[95/176] Building CXX object gstaxstreamer/CMakeFiles/gstaxstreamer.dir/src/GstAxDecode.cpp.o
+[96/176] Building CXX object gstaxstreamer/CMakeFiles/gstaxstreamer.dir/src/GstAxMeta.cpp.o
+[97/176] Building CXX object gstaxstreamer/CMakeFiles/gstaxstreamer.dir/src/GstAxFunnel.cpp.o
+[98/176] Building CXX object axstreamer/CMakeFiles/axstreamer.dir/src/AxStreamerUtils.cpp.o
+[99/176] Building CXX object axstreamer/CMakeFiles/axstreamer.dir/src/AxInference.cpp.o
+[100/176] Building CXX object axstreamer/CMakeFiles/axstreamer.dir/src/AxOpenCLAllocator.cpp.o
+[101/176] Building CXX object gstaxstreamer/CMakeFiles/gstaxstreamer.dir/src/GstAxPlugins.cpp.o
+[102/176] Building CXX object gstaxstreamer/CMakeFiles/gstaxstreamer.dir/src/GstAxDmaBufAllocator.cpp.o
+[103/176] Building CXX object gstaxstreamer/CMakeFiles/gstaxstreamer.dir/src/GstAxInference.cpp.o
+[104/176] Building CXX object gstaxstreamer/CMakeFiles/gstaxstreamer.dir/src/GstAxInPlace.cpp.o
+[105/176] Building CXX object gstaxstreamer/CMakeFiles/gstaxstreamer.dir/src/GstAxBufferPool.cpp.o
+[106/176] Building CXX object gstaxstreamer/CMakeFiles/gstaxstreamer.dir/src/GstAxStreamerUtils.cpp.o
+[107/176] Building CXX object gstaxstreamer/CMakeFiles/gstaxstreamer.dir/src/GstAxTransform.cpp.o
+[108/176] Building CXX object gstaxstreamer/CMakeFiles/gstaxstreamer.dir/src/GstAxOpenCLAllocator.cpp.o
+[109/176] Building CXX object customers/tutorials/CMakeFiles/decode_tu6b.dir/src/decode_tu6b.cc.o
+[110/176] Building CXX object gstaxstreamer/CMakeFiles/gstaxstreamer.dir/src/GstAxInferenceNet.cpp.o
+[111/176] Building CXX object customers/tutorials/CMakeFiles/decode_tu7.dir/src/decode_tu7.cc.o
+[112/176] Building CXX object customers/tutorials/CMakeFiles/inplace_tu9.dir/src/inplace_tu9.cc.o
+[113/176] Building CXX object customers/tutorials/CMakeFiles/decode_tu6a.dir/src/decode_tu6a.cc.o
+[114/176] Building CXX object axstreamer/CMakeFiles/axstreamer.dir/src/AxOpUtils.cpp.o
+[115/176] Linking CXX shared library axstreamer/libaxstreamer.so
+[116/176] Linking CXX shared library libtrackerattribute_mostfrequent.so
+[117/176] Linking CXX shared library libtrackerattribute_bestscore.so
+[118/176] Linking CXX shared library libdecode_facerec.so
+[119/176] Linking CXX shared library libdecode_ctc.so
+[120/176] Linking CXX shared library libdecode_semantic_seg.so
+[121/176] Linking CXX shared library libdecode_ssd2.so
+[122/176] Linking CXX shared library libdecode_faciallandmarks.so
+[123/176] Linking CXX shared library libdecode_faceboxes.so
+[124/176] Linking CXX shared library libdecode_classification.so
+[125/176] Linking CXX shared library libdecode_retinaface.so
+[126/176] Linking CXX shared library libdecode_yolov5.so
+[127/176] Building CXX object customers/tutorials/CMakeFiles/decode_tu9.dir/src/decode_tu9.cc.o
+[128/176] Linking CXX shared library libdecode_rtmdet.so
+[129/176] Linking CXX shared library libdecode_to_raw_tensor.so
+[130/176] Linking CXX shared library libdecode_yolov8seg.so
+[131/176] Linking CXX shared library libdecode_yolo.so
+[132/176] Linking CXX shared library libdecode_image.so
+[133/176] Linking CXX shared library libdecode_yolov10_simple.so
+[134/176] Linking CXX shared library libinplace_addstreamid.so
+[135/176] Linking CXX shared library libinplace_addtiles.so
+[136/176] Linking CXX shared library libdecode_yolov_obb.so
+[137/176] Linking CXX shared library libinplace_filterdetections.so
+[138/176] Linking CXX shared library libtransform_colorconvert.so
+[139/176] Linking CXX shared library libinplace_nms.so
+[140/176] Linking CXX shared library libdecode_yolov8.so
+[141/176] Linking CXX shared library libtransform_cropresize.so
+[142/176] Linking CXX shared library libdecode_yolox.so
+[143/176] Linking CXX shared library libtransform_dequantize.so
+[144/176] Linking CXX shared library libtransform_facealign.so
+[145/176] Linking CXX shared library libtransform_contrastnormalize.so
+[146/176] Linking CXX shared library libtransform_resize.so
+[147/176] Linking CXX shared library libtransform_centrecropextra.so
+[148/176] Linking CXX shared library libtransform_totensor.so
+[149/176] Linking CXX shared library libtransform_roicrop.so
+[150/176] Linking CXX shared library libtransform_padding.so
+[151/176] Linking CXX shared library libdecode_embeddings.so
+[152/176] Linking CXX shared library libtrackerfilter_numsubtaskruns.so
+[153/176] Linking CXX shared library libtransform_paddingdequantize.so
+[154/176] Linking CXX shared library libdecode_multihead.so
+[155/176] Linking CXX shared library libtransform_polar.so
+[156/176] Linking CXX shared library libtransform_perspective_cl.so
+[157/176] Linking CXX shared library libinplace_hidemeta.so
+[158/176] Linking CXX shared library libtransform_barrelcorrect_cl.so
+[159/176] Linking CXX shared library libtransform_polar_cl.so
+[160/176] Linking CXX shared library libtransform_postamble.so
+[161/176] Linking CXX shared library libtransform_resize_cl.so
+[162/176] Linking CXX shared library libtransform_colorconvert_cl.so
+[163/176] Linking CXX shared library libtransform_resizeratiocropexcess.so
+[164/176] Linking CXX shared library libtransform_yolopreproc.so
+[165/176] Linking CXX shared library libinplace_normalize.so
+[166/176] Linking CXX shared library libinplace_tracker.so
+[167/176] Linking CXX shared library libtransform_normalize_cl.so
+[168/176] Linking CXX shared library libdecode_facenet.so
+[169/176] Linking CXX shared library customers/tutorials/libdecode_tu6a.so
+[170/176] Linking CXX shared library gstaxstreamer/libgstaxstreamer.so
+[171/176] Linking CXX shared library customers/tutorials/libdecode_tu6b.so
+[172/176] Linking CXX shared library customers/tutorials/libdecode_tu9.so
+[173/176] Linking CXX shared library customers/tutorials/libdecode_tu7.so
+[174/176] Linking CXX shared library customers/tutorials/libinplace_tu9.so
+[175/176] Linking CXX shared library libinplace_draw.so
+[175/176] Install the project...
+-- Install configuration: "Release"
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libaxstreamer.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libaxstreamer.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/pkgconfig/axstreamer.pc
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libgstaxstreamer.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libgstaxstreamer.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtrackerfilter_numsubtaskruns.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtrackerfilter_numsubtaskruns.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtrackerattribute_bestscore.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtrackerattribute_bestscore.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtrackerattribute_mostfrequent.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtrackerattribute_mostfrequent.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_classification.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_classification.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_faceboxes.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_faceboxes.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_facerec.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_facerec.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_faciallandmarks.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_faciallandmarks.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_image.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_image.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_ctc.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_ctc.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_retinaface.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_retinaface.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_rtmdet.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_rtmdet.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_semantic_seg.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_semantic_seg.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_ssd2.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_ssd2.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_to_raw_tensor.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_to_raw_tensor.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_yolo.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_yolo.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_yolov5.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_yolov5.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_yolov8.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_yolov8.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_yolov_obb.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_yolov_obb.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_yolov10_simple.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_yolov10_simple.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_yolov8seg.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_yolov8seg.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_yolox.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_yolox.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libinplace_addstreamid.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libinplace_addstreamid.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libinplace_addtiles.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libinplace_addtiles.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libinplace_draw.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libinplace_draw.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libinplace_filterdetections.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libinplace_filterdetections.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libinplace_hidemeta.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libinplace_hidemeta.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libinplace_nms.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libinplace_nms.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_centrecropextra.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_centrecropextra.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_colorconvert.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_colorconvert.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_contrastnormalize.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_contrastnormalize.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_cropresize.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_cropresize.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_dequantize.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_dequantize.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_facealign.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_facealign.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_padding.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_padding.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_paddingdequantize.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_paddingdequantize.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_resize.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_resize.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_roicrop.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_roicrop.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_totensor.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_totensor.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_postamble.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_postamble.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_yolopreproc.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_yolopreproc.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_multihead.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_multihead.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_embeddings.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_embeddings.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_facenet.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_facenet.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_polar.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_polar.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_barrelcorrect_cl.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_barrelcorrect_cl.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_colorconvert_cl.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_colorconvert_cl.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_normalize_cl.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_normalize_cl.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_perspective_cl.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_perspective_cl.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_resize_cl.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_resize_cl.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_polar_cl.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_polar_cl.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libinplace_normalize.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libinplace_normalize.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_resizeratiocropexcess.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtransform_resizeratiocropexcess.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libinplace_tracker.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libinplace_tracker.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libtracker_factory.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libtracker_factory.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/bin/track
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/bin/track" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libbytetrack.so
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/liboc_sort.so
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libaxtracker.so
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_tu6a.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_tu6a.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_tu6b.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_tu6b.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_tu7.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_tu7.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_tu9.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libdecode_tu9.so" to ""
+-- Installing: /home/orangepi/abc/software/voyager-sdk/operators/lib/libinplace_tu9.so
+-- Set non-toolchain portion of runtime path of "/home/orangepi/abc/software/voyager-sdk/operators/lib/libinplace_tu9.so" to ""
+make[1]: Leaving directory '/home/orangepi/abc/software/voyager-sdk/operators'

@@ -1,0 +1,48 @@
+axelera-model-format: 1.0.0
+
+name: lprnet
+
+description: PyTorch implementation of LPRNet
+
+pipeline:
+  - license_plate:
+      model_name: lprnet
+      input:
+        type: image
+        color_format: RGB
+      preprocess:
+        - resize:
+            height: ${{input_height}}
+            width: ${{input_width}}
+        - torch-totensor:
+            scale: false
+        - normalize:
+            mean: 127.5
+            std: 128
+      postprocess:
+        - ctc-decoder:
+
+models:
+  lprnet:
+    class: LPRNetTorchModel
+    class_path: $AXELERA_FRAMEWORK/ax_models/torch/LPRNet.py
+    weight_path: weights/Final_LPRNet_model.pth
+    weight_url: https://media.axelera.ai/artifacts/model_cards/app_weights/license_plate_recog/Final_LPRNet_model.pth
+    weight_md5: 1790d7e41cb14a18c051b181f8774708
+    task_category: LicensePlateRecognition
+    input_tensor_layout: NCHW
+    input_tensor_shape: [1, 3, 24, 94]
+    input_color_format: RGB
+    num_classes: 68
+    dataset: LPRNetDataset
+    extra_kwargs:
+      trimmed_labels: false
+      LPRNet:
+        lpr_max_len: 8
+
+datasets:
+  LPRNetDataset:
+    class: LPRNetDataAdapter
+    class_path: $AXELERA_FRAMEWORK/ax_datasets/license_plate_recog.py
+    data_dir_name: license_plate_recog
+    labels_path: $AXELERA_FRAMEWORK/ax_datasets/labels/lprnet-char.yaml

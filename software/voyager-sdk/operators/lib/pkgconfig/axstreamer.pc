@@ -1,0 +1,10 @@
+prefix=/home/orangepi/abc/software/voyager-sdk/operators
+includedir=${prefix}/axstreamer/include
+libdir=${prefix}/lib
+
+Name: axstreamer
+Description: axstreamer library for performing inference in a highly performant pipeline
+URL: http://www.axelera.ai/
+Version: 0.8
+Cflags: -I"${includedir}"
+Libs: -L${libdir} -laxstreamer

@@ -1,0 +1,46 @@
+axelera-model-format: 1.0.0
+
+name: yolov8n-output-tensor
+
+description: An example of YOLOv8n output tensor
+
+pipeline:
+  - detections:
+      model_name: yolov8n-output-tensor
+      input:
+        type: image
+      preprocess:
+        - letterbox:
+            width: ${{input_width}}
+            height: ${{input_height}}
+            scaleup: True
+        - torch-totensor:
+      inference:
+        handle_all: True
+      postprocess:
+        - get-raw-tensor:
+            # Get raw tensor output that matches your original ONNX/PyTorch model.
+            # handle_all: True (above) ensures the output tensor is fully processed -
+            # dequantized, with correct dimensions and layout.
+
+models:
+  yolov8n-output-tensor:
+    class: AxONNXModel
+    class_path: $AXELERA_FRAMEWORK/ax_models/base_onnx.py
+    weight_path: weights/yolov8n_ultralytics_v8.1.0.onnx
+    weight_url: https://media.axelera.ai/artifacts/model_cards/weights/yolo/object_detection/yolov8n_ultralytics_v8.1.0.onnx
+    weight_md5: 2ec6c50f5cb0e059344f4ea7f72a3c41
+    task_category: ObjectDetection
+    input_tensor_layout: NCHW
+    input_tensor_shape: [1, 3, 640, 640]
+    input_color_format: RGB
+    num_classes: 80
+    dataset: CocoDataset-COCO2017
+
+datasets:
+  CocoDataset-COCO2017:
+    class: ObjDataAdapter
+    class_path: $AXELERA_FRAMEWORK/ax_datasets/objdataadapter.py
+    data_dir_name: coco
+    labels_path: $AXELERA_FRAMEWORK/ax_datasets/labels/coco.names
+    label_type: COCO2017

@@ -1,0 +1,47 @@
+axelera-model-format: 1.0.0
+
+name: resnet101-imagenet-onnx
+
+description: resnet101 (ImageNet) trained from torchvision and converted as ONNX
+
+pipeline:
+  - classifications:
+      model_name: resnet101-imagenet-onnx
+      input:
+        type: image
+      preprocess:
+        - resize:
+            size: 256
+        - centercrop:
+            height: ${{input_height}}
+            width: ${{input_width}}
+        - torch-totensor:
+        - normalize:
+            mean: 0.485, 0.456, 0.406
+            std: 0.229, 0.224, 0.225
+      postprocess:
+        - topk:
+            k: 5
+
+models:
+  resnet101-imagenet-onnx:
+    class: AxONNXModel
+    class_path: $AXELERA_FRAMEWORK/ax_models/base_onnx.py
+    weight_path: weights/resnet101_pretrained.onnx
+    weight_url: https://media.axelera.ai/artifacts/model_cards/weights/classification/resnet101_pretrained.onnx
+    weight_md5: 028c719f012abfb84cd4133ab57f5cee
+    task_category: Classification
+    input_tensor_layout: NCHW
+    input_tensor_shape: [1, 3, 224, 224]
+    input_color_format: RGB
+    dataset: ImageNet-1K
+    num_classes: 1000
+    extra_kwargs:
+      max_compiler_cores: 4
+
+datasets:
+  ImageNet-1K:
+    class: TorchvisionDataAdapter
+    class_path: $AXELERA_FRAMEWORK/ax_datasets/torchvision.py
+    data_dir_name: ImageNet
+    labels_path: $AXELERA_FRAMEWORK/ax_datasets/labels/imagenet1000_clsidx_to_labels.txt
