@@ -1,0 +1,8 @@
+RTSP_USERNAME=your_username
+RTSP_PASSWORD=your_password
+RTSP_IP=192.168.x.x
+RTSP_PORT=554
+RTSP_PATH=/av_stream/ch0
+
+VOYAGER_USER=your_voyager_user
+VOYAGER_TOKEN=your_voyager_token

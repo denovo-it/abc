@@ -1,0 +1,65 @@
+axelera-model-format: 1.0.0
+
+name: yolov5s-relu-coco
+
+description: YOLOv5s-v5.0, ReLU, 640x640, S2D is replaced by a Conv operator (COCO)
+
+pipeline:
+  - detections:
+      model_name: yolov5s-relu-coco
+      input:
+        type: image
+      preprocess:
+        - letterbox:
+            height: ${{input_height}}
+            scaleup: true
+            width: ${{input_width}}
+        - torch-totensor:
+      inference:
+        handle_all: false
+      postprocess:
+        - decodeyolo:
+            box_format: xywh
+            conf_threshold: 0.25
+            label_filter: ${{label_filter}}
+            max_nms_boxes: 30000
+            nms_class_agnostic: false
+            nms_iou_threshold: 0.45
+            nms_top_k: 300
+            normalized_coord: false
+            use_multi_label: false
+            eval:
+              conf_threshold: 0.001
+              nms_class_agnostic: false
+              nms_iou_threshold: 0.65
+              use_multi_label: true
+
+models:
+  yolov5s-relu-coco:
+    class: AxYolo
+    class_path: $AXELERA_FRAMEWORK/ax_models/yolo/ax_yolo.py
+    task_category: ObjectDetection
+    input_tensor_layout: NCHW
+    input_tensor_shape: [1, 3, 640, 640]
+    input_color_format: RGB
+    weight_path: weights/yolov5s-relu.pt
+    weight_url: https://media.axelera.ai/artifacts/model_cards/weights/yolo/object_detection/yolov5s-relu.pt
+    weight_md5: f82d334588b6579124fad0afc0800724
+    num_classes: 80
+    dataset: CocoDataset-COCO2017
+    extra_kwargs:
+      YOLO:
+        focus_layer_replacement: true
+
+datasets:
+  CocoDataset-COCO2017:
+    class: ObjDataAdapter
+    class_path: $AXELERA_FRAMEWORK/ax_datasets/objdataadapter.py
+    data_dir_name: coco
+    labels_path: $AXELERA_FRAMEWORK/ax_datasets/labels/coco.names
+    label_type: COCO2017
+
+operators:
+  decodeyolo:
+    class: DecodeYolo
+    class_path: $AXELERA_FRAMEWORK/ax_models/decoders/yolo.py

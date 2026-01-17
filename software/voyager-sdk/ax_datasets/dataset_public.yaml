@@ -1,0 +1,239 @@
+# Dataset Configuration File
+#
+# Format:
+# <dataset_name>:
+#   description: <string>
+#   download_hint: |
+#     <multi-line string with {split_files} placeholder>
+#   splits:
+#     <split_name>:  # Must be one of: val or train
+#       - name: <file_name>
+#         url: <S3_url>
+#         drop_dirs: <int>
+#         md5: <string> # optional
+#         sub_dir: <string> # optional, subdirectory within the data_root
+#         check_files: # optional, list of key files to check for existence
+#           - <file_path>
+#
+# Notes:
+# - All datasets must have 'description', 'download_hint', and 'splits' keys.
+# - 'splits' must contain one or more of: 'val' or 'train'. Typically, 'val' is used for validation and 'train' for calibration.
+# - Each split must have a 'files' key with a list of file objects.
+# - All URLs should start with 'http[s]://'
+
+
+SuperResolutionCustomSet128x128:
+  description: Dataset contains five 128x128 images from Set5 and Set14 super resolution datasets (https://github.com/eugenesiow/super-image-data?tab=readme-ov-file)
+  download_hint: ""
+  splits:
+    val:
+      - name: val
+        url: https://media.axelera.ai/artifacts/model_cards/datasets/superresolution/sr_128x128.zip
+        md5: 8181538a8a6d4e4651a5930ef479a5b5
+        drop_dirs: 0
+
+NYUDepthV2:
+  description: NYUDepthV2 depth estimation dataset
+  download_hint: Dataset is downloaded automatically into the ./data/depthestimation folder.
+  splits:
+    val:
+      - name: val
+        url: https://media.axelera.ai/artifacts/model_cards/datasets/depthestimation/nyudepthv2_val.zip
+        md5: 6afb43bfe9ad6a93486ff9a7f8fe1381
+        drop_dirs: 0
+    train:
+      - name: train_subset
+        url: https://media.axelera.ai/artifacts/model_cards/datasets/depthestimation/nyudepthv2_train_subset.zip
+        md5: fbde2c171ab7957a9b61a5cad2de64a6
+        drop_dirs: 0
+
+LPRNetDataset:
+  description: LPRNetDataset Chinese license plate dataset
+  download_hint: Dataset is downloaded automatically into the ./data/license_plate_recog folder.
+  splits:
+    val:
+      - name: val
+        url: https://media.axelera.ai/artifacts/model_cards/datasets/license_plate_recognition/LPRNet_data.zip
+        md5: 31edd362c5da91f4dbcb60a67e81cd28
+        drop_dirs: 0
+
+COCO2017:
+  description: COCO 2017 dataset for object detection, segmentation, and pose estimation.
+  download_hint: |
+    The dataset includes images, annotations, and additional labels for segmentation and pose estimation.
+    Ensure you have sufficient storage space before downloading.
+  splits:
+    train:
+      - name: train2017.zip
+        url: https://media.axelera.ai/artifacts/data/coco/train2017.zip
+        md5: cced6f7f71b7629ddf16f17bbcfab6b2
+        drop_dirs: 0
+        sub_dir: images
+        check_files:
+          - images/train2017
+    val:
+      - name: val2017.zip
+        url: https://media.axelera.ai/artifacts/data/coco/val2017.zip
+        md5: 442b8da7639aecaf257c1dceb8ba8c80
+        drop_dirs: 0
+        sub_dir: images
+        check_files:
+          - images/val2017
+    seg:
+      - name: coco2017labels-seg.zip
+        url: https://media.axelera.ai/artifacts/data/coco/coco2017labels-seg.zip
+        md5: 92ed19be81b08680f5c56df48304d99c
+        drop_dirs: 0
+        check_files:
+          - labels_seg/train2017
+          - labels_seg/val2017
+    pose:
+      - name: coco2017labels-kpts.zip
+        url: https://media.axelera.ai/artifacts/data/coco/coco2017labels-kpts.zip
+        md5: 6df7d8035de2ab34c11afb689c7fa827
+        drop_dirs: 0
+        check_files:
+          - labels_kpts/train2017
+          - labels_kpts/val2017
+          - labels_kpts/train2017.txt
+          - labels_kpts/val2017.txt
+    annotations:
+      - name: annotations_trainval2017.zip
+        url: https://media.axelera.ai/artifacts/data/coco/annotations_trainval2017.zip
+        md5: f4bbac642086de4f52a3fdda2de5fa2c
+        drop_dirs: 0
+        check_files:
+          - annotations/captions_train2017.json
+          - annotations/captions_val2017.json
+          - annotations/instances_train2017.json
+          - annotations/instances_val2017.json
+          - annotations/person_keypoints_train2017.json
+          - annotations/person_keypoints_val2017.json
+    labels:
+      - name: coco2017labels.zip
+        url: https://media.axelera.ai/artifacts/data/coco/coco2017labels.zip
+        md5: db23085d5ebf5d1ca33f304eab7bdd87
+        drop_dirs: 1
+        check_files:
+          - labels/train2017
+          - labels/val2017
+
+COCO2014:
+  description: COCO 2014 dataset for object detection and segmentation.
+  download_hint: |
+    The dataset includes images, annotations, and additional labels for segmentation.
+    Ensure you have sufficient storage space before downloading.
+  splits:
+    train:
+      - name: train2014.zip
+        url: https://media.axelera.ai/artifacts/data/coco/train2014.zip
+        md5: ""
+        drop_dirs: 0
+        sub_dir: images
+        check_files:
+          - images/train2014
+    val:
+      - name: val2014.zip
+        url: https://media.axelera.ai/artifacts/data/coco/val2014.zip
+        md5: a3d79f5ed8d289b7a7554ce06a5782b3
+        drop_dirs: 0
+        sub_dir: images
+        check_files:
+          - images/val2014
+    annotations:
+      - name: instances_train-val2014.zip
+        url: https://media.axelera.ai/artifacts/data/coco/instances_train-val2014.zip
+        md5: 59582776b8dd745d649cd249ada5acf7
+        drop_dirs: 0
+        check_files:
+          - annotations/instances_val2014.json
+    labels:
+      - name: labels.tgz
+        url: https://media.axelera.ai/artifacts/data/coco/labels.tgz
+        md5: d4adaab8f1174071b6eb20f85ce24016
+        drop_dirs: 0
+        check_files:
+          - labels/train2014
+          - labels/val2014
+
+VOC2012:
+  description: PASCAL VOC 2012 dataset for object detection and segmentation.
+  download_hint: |
+    The dataset includes images and annotations for training and validation.
+    Ensure you have sufficient storage space before downloading.
+  splits:
+    trainval:
+      - name: VOCtrainval_11-May-2012.tar
+        url: https://media.axelera.ai/artifacts/data/pascalvoc/VOCtrainval_11-May-2012.tar
+        md5: 6cd6e144f989b92b3379bac3b3de84fd
+        drop_dirs: 0
+        check_files:
+          - VOCdevkit/VOC2012/ImageSets
+          - VOCdevkit/VOC2012/JPEGImages
+          - VOCdevkit/VOC2012/Annotations
+
+VOC2007:
+  description: PASCAL VOC 2007 dataset for object detection and segmentation.
+  download_hint: |
+    The dataset includes images and annotations for training and validation.
+    Ensure you have sufficient storage space before downloading.
+  splits:
+    trainval:
+      - name: VOCtrainval_06-Nov-2007.tar
+        url: https://media.axelera.ai/artifacts/data/pascalvoc/VOCtrainval_06-Nov-2007.tar
+        md5: c52e279531787c972589f7e41ab4ae64
+        drop_dirs: 0
+        check_files:
+          - VOCdevkit/VOC2007/ImageSets
+          - VOCdevkit/VOC2007/JPEGImages
+          - VOCdevkit/VOC2007/Annotations
+    test:
+      - name: VOCtest_06-Nov-2007.tar
+        url: http://host.robots.ox.ac.uk/pascal/VOC/voc2007/VOCtest_06-Nov-2007.tar/VOCtest_06-Nov-2007.tar
+        md5: b6e924de25625d8de591ea690078ad9f
+        drop_dirs: 0
+        check_files:
+          - VOCdevkit/VOC2007/ImageSets/Main/test.txt
+
+
+Market1501ReIdDataset:
+  description: Market1501 for person re-identification
+  download_hint: Dataset is downloaded automatically into the ./data/reid folder.
+  splits:
+    val:
+      - name: val
+        url: https://media.axelera.ai/artifacts/model_cards/datasets/reid/market1501.zip
+        md5: 1093fbe5439e0c9542d1a58b5cc68203
+        drop_dirs: 0
+
+
+MOT17:
+  description: MOT17 multi-object tracking dataset
+  download_hint: Dataset is downloaded automatically into the ./data/mot folder. This is an already preprocessed dataset. See more details in the Data section https://github.com/GerardMaggiolino/Deep-OC-SORT/tree/main?tab=readme-ov-file
+  splits:
+    val:
+      - name: val
+        url: https://media.axelera.ai/artifacts/model_cards/datasets/mot/motChallenge/MOT17.zip
+        md5: ab71c9a8a8f7989149e37c9a6d893ca3
+        drop_dirs: 0
+
+MOT20:
+  description: MOT20 multi-object tracking dataset
+  download_hint: Dataset is downloaded automatically into the ./data/mot folder. This is an already preprocessed dataset. See more details in the Data section https://github.com/GerardMaggiolino/Deep-OC-SORT/tree/main?tab=readme-ov-file
+  splits:
+    val:
+      - name: val
+        url: https://media.axelera.ai/artifacts/model_cards/datasets/mot/motChallenge/MOT20.zip
+        md5: d64feaaad997cfb0bfa277618544450b
+        drop_dirs: 0
+
+
+LFWPairs:
+  description: LFW Pair dataset for face recognition
+  download_hint: Dataset is downloaded automatically into the ./data/LFW/lfw-py folder.
+  splits:
+    val:
+      - name: val
+        url: https://media.axelera.ai/artifacts/model_cards/datasets/face/lfw-py.zip
+        md5: 0c57a2adf3e7683ba3e28443b6856059
+        drop_dirs: 0

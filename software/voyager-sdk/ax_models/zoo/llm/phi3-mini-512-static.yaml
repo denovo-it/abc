@@ -1,0 +1,18 @@
+axelera-model-format: 1.0.0
+
+name: phi3-mini-512-static
+
+description: HuggingFace Transformers Phi-3-mini-4k-instruct model, limiting the sequence length to 512 tokens. This model is statically compiled by using Axelera R&D tools.
+
+models:
+  phi3-mini-512-static:
+    precompiled_url: https://llm.axelera.ai/icdf/4.x/phi3_512_model.tar.gz
+    precompiled_path: build/phi3-mini-512-static/phi3_512_model.tar.gz
+    precompiled_md5: d59499f582030f19853bb610450b0e46
+    task_category: LanguageModel
+    extra_kwargs:
+      llm:
+        max_tokens: 512
+        embeddings_url: https://llm.axelera.ai/embeddings/phi3_mini_embeddings.npz
+        embeddings_md5: 3ea21245bb4e2d3f0c124d7b56fc59e4
+        model_name: microsoft/Phi-3-mini-4k-instruct

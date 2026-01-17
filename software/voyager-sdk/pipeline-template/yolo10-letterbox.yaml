@@ -1,0 +1,27 @@
+input:
+  type: image
+preprocess:
+  - letterbox:
+      width: ${{input_width}}
+      height: ${{input_height}}
+      scaleup: True
+  - torch-totensor:
+inference:
+  handle_all: False
+postprocess:
+  - decodeyolo10:
+      box_format: xyxy # box format of the model output
+      normalized_coord: False
+      label_filter: ${{label_filter}}
+      conf_threshold: 0.25
+      top_k: 300
+      use_multi_label: False
+      eval: # overrides for evaluating accuracy
+        conf_threshold: 0.001
+        use_multi_label: True
+
+
+operators:
+  decodeyolo10:
+    class: DecodeYolo10
+    class_path: $AXELERA_FRAMEWORK/ax_models/decoders/yolo10.py

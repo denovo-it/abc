@@ -1,0 +1,48 @@
+axelera-model-format: 1.0.0
+
+name: squeezenet1.0-imagenet
+
+description: SqueezeNet 1.0 (ImageNet)
+
+pipeline:
+  - classifications:
+      model_name: squeezenet1.0-imagenet
+      input:
+        type: image
+      preprocess:
+        - resize:
+            size: 256
+        - centercrop:
+            height: ${{input_height}}
+            width: ${{input_width}}
+        - torch-totensor:
+        - normalize:
+            mean: 0.485, 0.456, 0.406
+            std: 0.229, 0.224, 0.225
+      postprocess:
+        - topk:
+            k: 5
+
+models:
+  squeezenet1.0-imagenet:
+    class: AxTorchvisionSqueezeNet1_0
+    class_path: $AXELERA_FRAMEWORK/ax_models/torchvision/squeezenet.py
+    task_category: Classification
+    input_tensor_layout: NCHW
+    input_tensor_shape: [1, 3, 224, 224]
+    input_color_format: RGB
+    dataset: ImageNet-1K
+    num_classes: 1000
+    extra_kwargs:
+      max_compiler_cores: 4
+      torchvision_args:
+        torchvision_weights_args:
+          object: SqueezeNet1_0_Weights
+          name: IMAGENET1K_V1
+
+datasets:
+  ImageNet-1K:
+    class: TorchvisionDataAdapter
+    class_path: $AXELERA_FRAMEWORK/ax_datasets/torchvision.py
+    data_dir_name: ImageNet
+    labels_path: $AXELERA_FRAMEWORK/ax_datasets/labels/imagenet1000_clsidx_to_labels.txt

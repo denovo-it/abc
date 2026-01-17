@@ -1,0 +1,51 @@
+axelera-model-format: 1.0.0
+
+name: res2net50d-grayscale-beans
+
+description: res2net50d.in1k from timm, transfer learning for grayscale on iBeans dataset
+
+model-env:
+  dependencies:
+    - timm
+    - datasets
+
+pipeline:
+  - classifications:
+      model_name: res2net50d-grayscale-beans
+      input:
+        color_format: GRAY
+      preprocess:
+        - resize:
+            size: 256
+        - centercrop:
+            width: 224
+            height: 224
+        - torch-totensor:
+        - normalize:
+            mean: 0.456
+            std: 0.224
+      postprocess:
+        - topk:
+            k: 1
+
+models:
+  res2net50d-grayscale-beans:
+    class: AxTimmModel
+    class_path: $AXELERA_FRAMEWORK/ax_models/torch/ax_timm.py
+    task_category: Classification
+    input_tensor_layout: NCHW
+    input_tensor_shape: [1, 1, 224, 224]
+    input_color_format: GRAY
+    weight_path: grayscale_res2net50d_beans.pth
+    dataset: BeansDataset
+    num_classes: 3
+    extra_kwargs:
+      timm_model_args:
+        name: res2net50d.in1k
+
+datasets:
+  BeansDataset:
+    class: CustomDataAdapter
+    class_path: dataadapter.py
+    data_dir_name: beans_dataset
+    labels: ["angular_leaf_spot", "bean_rust", "healthy"]
