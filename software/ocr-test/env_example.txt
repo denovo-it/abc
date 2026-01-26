@@ -1,0 +1,17 @@
+# OCR Test - Configuration
+# Copy this file to .env and configure
+
+# RTSP Camera (SONOFF CAM S2)
+RTSP_USERNAME=your_username
+RTSP_PASSWORD=your_password
+RTSP_IP=192.168.x.x
+RTSP_PORT=554
+RTSP_PATH=/av_stream/ch0
+
+# OCR Settings
+OCR_MODEL=ppocr_v3
+OCR_LANG=en
+
+# Debug
+DEBUG=false
+SAVE_INTERMEDIATE=false

@@ -2,4 +2,11 @@
 **/venv
 **/build/
 **/*.pt
+**/*.onnx
 **/__pycache__/
+
+# OCR Test
+software/ocr-test/models/*.tar
+software/ocr-test/test_images/*.jpg
+software/ocr-test/test_images/*.png
+!software/ocr-test/test_images/.gitkeep

@@ -1,0 +1,17 @@
+# OCR Test - Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core
+numpy>=1.24.0
+opencv-python-headless>=4.8.0
+Pillow>=9.0.0
+
+# Configuration
+python-dotenv>=1.0.0
+
+# ONNX inference (CPU fallback)
+onnxruntime>=1.15.0
+
+# For model conversion (optional)
+# paddle2onnx
+# paddlepaddle
