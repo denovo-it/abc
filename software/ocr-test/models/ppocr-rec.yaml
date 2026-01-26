@@ -1,0 +1,40 @@
+axelera-model-format: 1.0.0
+
+name: ppocr-rec
+
+description: PP-OCRv3 Latin Text Recognition Model for book cover OCR
+
+pipeline:
+  - text_recognition:
+      model_name: ppocr_rec
+      input:
+        type: image
+        color_format: RGB
+      preprocess:
+        - resize:
+            height: 48
+            width: 320
+            keep_ratio: true
+            pad_value: 0
+        - normalize:
+            mean: 127.5
+            std: 127.5
+      postprocess:
+        - ctc-decoder:
+
+models:
+  ppocr_rec:
+    class: PPOCRv3RecModel
+    class_path: ppocr_rec_model.py
+    task_category: OpticalCharacterRecognition
+    input_tensor_layout: NCHW
+    input_tensor_shape: [1, 3, 48, 320]
+    input_color_format: RGB
+    weight_path: latin_PP-OCRv3_rec_infer.onnx
+    num_classes: 187
+    dataset: LatinOCRDataset
+
+datasets:
+  LatinOCRDataset:
+    class: DataAdapter
+    labels_path: latin_chars.yaml

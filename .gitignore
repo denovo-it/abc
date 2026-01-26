@@ -3,4 +3,12 @@
 **/venv
 **/build/
 **/*.pt
+**/*.onnx
 **/__pycache__/
+CLAUDE.md
+
+# OCR Test
+software/ocr-test/models/*.tar
+software/ocr-test/test_images/*.jpg
+software/ocr-test/test_images/*.png
+!software/ocr-test/test_images/.gitkeep
