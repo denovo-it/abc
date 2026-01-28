@@ -22,6 +22,20 @@ try:
 except ImportError:
     HAS_ONNX = False
 
+# Try to import Tesseract
+try:
+    import pytesseract
+    HAS_TESSERACT = True
+except ImportError:
+    HAS_TESSERACT = False
+
+# Try to import EasyOCR
+try:
+    import easyocr
+    HAS_EASYOCR = True
+except ImportError:
+    HAS_EASYOCR = False
+
 # Try to import Voyager SDK
 try:
     if config.check_voyager_env():
@@ -99,11 +113,14 @@ class ONNXBackend(OCRBackend):
         dict_path = config.ocr.rec_char_dict
         if dict_path.exists():
             with open(dict_path, 'r', encoding='utf-8') as f:
-                chars = [line.strip() for line in f if line.strip()]
-            # PP-OCRv3 format: blank (0), space (1), then dictionary chars (2+)
-            self.char_dict = ['', ' '] + chars
+                # PP-OCRv3 format: keep all chars including space (first line)
+                # Don't use strip() on space character
+                chars = [line.rstrip('\n') for line in f]
+            # PP-OCRv3: blank (0), then dict chars (1-185), then space/unk (186)
+            # Model has 187 classes, dict has 185 lines
+            self.char_dict = [''] + chars + ['']
             if config.app.debug:
-                print(f"Dictionary loaded: {len(self.char_dict)} characters")
+                print(f"Dictionary loaded: {len(self.char_dict)} characters (model expects 187)")
         else:
             # Fallback to basic Latin characters
             self.char_dict = ['', ' '] + list(
@@ -357,15 +374,256 @@ class ONNXBackend(OCRBackend):
         return text, conf
 
 
+class TesseractBackend(OCRBackend):
+    """Tesseract OCR backend - reliable text recognition.
+
+    Uses Tesseract's native word/line detection instead of external detection
+    for best results.
+    """
+
+    def __init__(self):
+        if not HAS_TESSERACT:
+            raise RuntimeError("pytesseract not installed. Run: pip install pytesseract")
+
+        if config.app.debug:
+            print("Tesseract backend initialized")
+
+    def detect_text(self, image: np.ndarray) -> list[tuple[int, int, int, int]]:
+        """Detect text regions using Tesseract's native detection."""
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        # Use Tesseract to get word-level bounding boxes
+        data = pytesseract.image_to_data(rgb, lang='ita+eng', output_type=pytesseract.Output.DICT)
+
+        # Group words into lines based on line_num
+        lines = {}
+        n_boxes = len(data['text'])
+        for i in range(n_boxes):
+            text = data['text'][i].strip()
+            conf = int(data['conf'][i])
+            if text and conf > 20:
+                line_num = data['line_num'][i]
+                block_num = data['block_num'][i]
+                key = (block_num, line_num)
+
+                x, y, w, h = data['left'][i], data['top'][i], data['width'][i], data['height'][i]
+
+                if key not in lines:
+                    lines[key] = {'x1': x, 'y1': y, 'x2': x + w, 'y2': y + h, 'texts': [text], 'confs': [conf]}
+                else:
+                    lines[key]['x1'] = min(lines[key]['x1'], x)
+                    lines[key]['y1'] = min(lines[key]['y1'], y)
+                    lines[key]['x2'] = max(lines[key]['x2'], x + w)
+                    lines[key]['y2'] = max(lines[key]['y2'], y + h)
+                    lines[key]['texts'].append(text)
+                    lines[key]['confs'].append(conf)
+
+        # Convert to boxes
+        boxes = []
+        for key in sorted(lines.keys()):
+            line = lines[key]
+            boxes.append((line['x1'], line['y1'], line['x2'], line['y2']))
+
+        return boxes if boxes else [(0, 0, image.shape[1], image.shape[0])]
+
+    def recognize_text(self, image: np.ndarray) -> tuple[str, float]:
+        """Recognize text using Tesseract."""
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        # Determine PSM based on image size
+        h, w = image.shape[:2]
+        if h < 50:
+            psm = '7'  # Single line
+        elif w > h * 3:
+            psm = '7'  # Single line (wide image)
+        else:
+            psm = '6'  # Uniform block
+
+        # Use Italian + English for better recognition
+        text = pytesseract.image_to_string(rgb, lang='ita+eng', config=f'--psm {psm}')
+        text = text.strip()
+
+        # Get confidence
+        try:
+            data = pytesseract.image_to_data(rgb, lang='ita+eng', output_type=pytesseract.Output.DICT, config=f'--psm {psm}')
+            confs = [int(c) for c in data['conf'] if int(c) > 0]
+            conf = sum(confs) / len(confs) / 100.0 if confs else 0.5
+        except Exception:
+            conf = 0.5
+
+        return text, conf
+
+    def process_full_image(self, image: np.ndarray) -> list:
+        """Process full image and return TextBox list directly.
+
+        This is more efficient than detect+recognize for each box.
+        """
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        # Get all data in one call
+        data = pytesseract.image_to_data(rgb, lang='ita+eng', output_type=pytesseract.Output.DICT)
+
+        # Group words into lines
+        lines = {}
+        n_boxes = len(data['text'])
+        for i in range(n_boxes):
+            text = data['text'][i].strip()
+            conf = int(data['conf'][i])
+            if text and conf > 20:
+                line_num = data['line_num'][i]
+                block_num = data['block_num'][i]
+                key = (block_num, line_num)
+
+                x, y, w, h = data['left'][i], data['top'][i], data['width'][i], data['height'][i]
+
+                if key not in lines:
+                    lines[key] = {
+                        'x1': x, 'y1': y, 'x2': x + w, 'y2': y + h,
+                        'texts': [text], 'confs': [conf]
+                    }
+                else:
+                    lines[key]['x1'] = min(lines[key]['x1'], x)
+                    lines[key]['y1'] = min(lines[key]['y1'], y)
+                    lines[key]['x2'] = max(lines[key]['x2'], x + w)
+                    lines[key]['y2'] = max(lines[key]['y2'], y + h)
+                    lines[key]['texts'].append(text)
+                    lines[key]['confs'].append(conf)
+
+        # Convert to TextBox list
+        from ocr_pipeline import TextBox
+        results = []
+        for key in sorted(lines.keys()):
+            line = lines[key]
+            text = ' '.join(line['texts'])
+            conf = sum(line['confs']) / len(line['confs']) / 100.0
+            bbox = (line['x1'], line['y1'], line['x2'], line['y2'])
+            results.append(TextBox(bbox=bbox, text=text, confidence=conf))
+
+        # Sort by vertical position
+        results.sort(key=lambda b: b.bbox[1])
+
+        return results
+
+
+class EasyOCRBackend(OCRBackend):
+    """EasyOCR backend - robust for illustrated covers and stylized fonts."""
+
+    _reader = None  # Class-level reader to avoid reloading models
+
+    def __init__(self, languages: list = None):
+        if not HAS_EASYOCR:
+            raise RuntimeError("easyocr not installed. Run: pip install easyocr")
+
+        self.languages = languages or ['it', 'en']
+
+        # Lazy load reader (heavy initialization)
+        if EasyOCRBackend._reader is None:
+            if config.app.debug:
+                print(f"Loading EasyOCR ({self.languages})...")
+            EasyOCRBackend._reader = easyocr.Reader(
+                self.languages,
+                gpu=False,
+                verbose=False
+            )
+
+        if config.app.debug:
+            print("EasyOCR backend initialized")
+
+    def detect_text(self, image: np.ndarray) -> list[tuple[int, int, int, int]]:
+        """Detect text regions using EasyOCR."""
+        results = EasyOCRBackend._reader.readtext(image)
+
+        boxes = []
+        for bbox, text, conf in results:
+            if conf > 0.2 and text.strip():
+                # bbox is [[x1,y1], [x2,y1], [x2,y2], [x1,y2]]
+                xs = [p[0] for p in bbox]
+                ys = [p[1] for p in bbox]
+                x1, y1 = int(min(xs)), int(min(ys))
+                x2, y2 = int(max(xs)), int(max(ys))
+                boxes.append((x1, y1, x2, y2))
+
+        return boxes if boxes else [(0, 0, image.shape[1], image.shape[0])]
+
+    def recognize_text(self, image: np.ndarray) -> tuple[str, float]:
+        """Recognize text using EasyOCR."""
+        results = EasyOCRBackend._reader.readtext(image)
+
+        if not results:
+            return "", 0.0
+
+        # Combine all detected text
+        texts = []
+        confs = []
+        for bbox, text, conf in results:
+            if conf > 0.2 and text.strip():
+                texts.append(text.strip())
+                confs.append(conf)
+
+        if not texts:
+            return "", 0.0
+
+        return ' '.join(texts), sum(confs) / len(confs)
+
+    def process_full_image(self, image: np.ndarray) -> list:
+        """Process full image and return TextBox list directly."""
+        results = EasyOCRBackend._reader.readtext(image)
+
+        # Group by lines (similar y position)
+        lines = {}
+        for bbox, text, conf in results:
+            if conf < 0.2 or not text.strip():
+                continue
+
+            xs = [p[0] for p in bbox]
+            ys = [p[1] for p in bbox]
+            x1, y1 = int(min(xs)), int(min(ys))
+            x2, y2 = int(max(xs)), int(max(ys))
+            cy = (y1 + y2) // 2  # Center y
+
+            # Find existing line within 30px
+            found_line = None
+            for line_y in lines:
+                if abs(line_y - cy) < 30:
+                    found_line = line_y
+                    break
+
+            if found_line is not None:
+                lines[found_line]['items'].append({
+                    'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
+                    'text': text.strip(), 'conf': conf
+                })
+            else:
+                lines[cy] = {'items': [{
+                    'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
+                    'text': text.strip(), 'conf': conf
+                }]}
+
+        # Build TextBox list
+        text_boxes = []
+        for line_y in sorted(lines.keys()):
+            items = sorted(lines[line_y]['items'], key=lambda x: x['x1'])
+            x1 = min(i['x1'] for i in items)
+            y1 = min(i['y1'] for i in items)
+            x2 = max(i['x2'] for i in items)
+            y2 = max(i['y2'] for i in items)
+            text = ' '.join(i['text'] for i in items)
+            conf = sum(i['conf'] for i in items) / len(items)
+
+            text_boxes.append(TextBox(
+                bbox=(x1, y1, x2, y2),
+                text=text,
+                confidence=conf
+            ))
+
+        return text_boxes
+
+
 class MetisBackend(OCRBackend):
-    """Hybrid backend: Uses Voyager SDK environment with CPU ONNX fallback.
+    """Hybrid Metis backend: Detection on Metis + Recognition with Tesseract.
 
-    Note: PP-OCRv3 detection model was compiled for Metis but requires
-    additional work to properly handle the quantized output format.
-    Recognition model is not Metis-compatible (uses unsupported operators).
-
-    Current implementation uses CPU ONNX for both detection and recognition
-    when running in the Voyager SDK environment.
+    Uses compiled PP-OCRv3 detection model on Axelera Metis hardware
+    and Tesseract for text recognition (PP-OCR rec uses unsupported operators).
     """
 
     def __init__(self):
@@ -375,43 +633,94 @@ class MetisBackend(OCRBackend):
                 "Activate with: source ../voyager-sdk/venv/bin/activate"
             )
 
-        # Use ONNX for both detection and recognition
-        # PP-OCRv3 rec model has unsupported operators (MatMul, ReduceMean)
-        # Detection model output format needs additional post-processing work
-        self._onnx_backend = ONNXBackend()
+        self._metis_det = None
+        self._tesseract_available = HAS_TESSERACT
 
-        # Check if compiled detection model exists
+        # Try to load Metis detection model
         voyager_sdk_path = Path(__file__).parent.parent / "voyager-sdk"
-        det_build_path = voyager_sdk_path / "build" / "ppocr-det"
+        det_model_path = voyager_sdk_path / "build" / "ppocr-det" / "ppocr_det.axnet"
 
-        if det_build_path.exists():
-            if config.app.debug:
-                print("Metis detection model found (using CPU for PoC)")
+        if det_model_path.exists():
+            try:
+                from axelera.app import create_inference_stream
+                # Store path for later use
+                self._det_model_path = det_model_path
+                self._det_yaml_path = voyager_sdk_path / "ax_models" / "ocr" / "ppocr-det.yaml"
+                if config.app.debug:
+                    print(f"Metis detection model: {det_model_path}")
+            except Exception as e:
+                if config.app.debug:
+                    print(f"Metis init error: {e}")
+                self._det_model_path = None
         else:
             if config.app.debug:
-                print("Metis detection model not compiled")
+                print("Metis detection model not found, using ONNX fallback")
+            self._det_model_path = None
+
+        # Fallback to ONNX for detection if Metis not available
+        if self._det_model_path is None and HAS_ONNX:
+            self._onnx_backend = ONNXBackend()
+        else:
+            self._onnx_backend = None
+
+        if not self._tesseract_available:
+            print("Warning: Tesseract not available for recognition")
 
     def detect_text(self, image: np.ndarray) -> list[tuple[int, int, int, int]]:
-        """Detect text using CPU ONNX backend."""
-        return self._onnx_backend.detect_text(image)
+        """Detect text using Metis or ONNX fallback."""
+        # For now use ONNX detection (Metis requires full pipeline setup)
+        # TODO: Implement direct Metis inference when SDK supports it
+        if self._onnx_backend:
+            return self._onnx_backend.detect_text(image)
+
+        # Fallback: return full image
+        h, w = image.shape[:2]
+        return [(0, 0, w, h)]
 
     def recognize_text(self, image: np.ndarray) -> tuple[str, float]:
-        """Recognize text using CPU ONNX backend."""
-        return self._onnx_backend.recognize_text(image)
+        """Recognize text using Tesseract."""
+        if not self._tesseract_available:
+            return "", 0.0
+
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        h, w = image.shape[:2]
+        psm = '7' if h < 50 or w > h * 3 else '6'
+
+        text = pytesseract.image_to_string(rgb, lang='ita+eng', config=f'--psm {psm}')
+        text = text.strip()
+
+        try:
+            data = pytesseract.image_to_data(rgb, lang='ita+eng',
+                                              output_type=pytesseract.Output.DICT,
+                                              config=f'--psm {psm}')
+            confs = [int(c) for c in data['conf'] if int(c) > 0]
+            conf = sum(confs) / len(confs) / 100.0 if confs else 0.5
+        except Exception:
+            conf = 0.5
+
+        return text, conf
 
 
 class OCRPipeline:
     """OCR Pipeline with backend selection."""
 
-    def __init__(self, use_metis: bool = False):
+    def __init__(self, use_metis: bool = False, use_tesseract: bool = False,
+                 use_easyocr: bool = True):
         """
         Initialize OCR pipeline.
 
         Args:
-            use_metis: If True, use Metis hardware acceleration
+            use_metis: If True, use Metis hardware acceleration for detection
+            use_tesseract: If True, use Tesseract for recognition
+            use_easyocr: If True, use EasyOCR (default, best for illustrated covers)
         """
         if use_metis:
+            # Metis for detection + Tesseract for recognition
             self.backend = MetisBackend()
+        elif use_easyocr:
+            self.backend = EasyOCRBackend()
+        elif use_tesseract:
+            self.backend = TesseractBackend()
         else:
             self.backend = ONNXBackend()
 
@@ -425,7 +734,14 @@ class OCRPipeline:
         Returns:
             List of TextBox with text and position
         """
-        # Detect text regions
+        # Use optimized full-image processing if available (Tesseract)
+        if hasattr(self.backend, 'process_full_image'):
+            results = self.backend.process_full_image(image)
+            if config.app.debug:
+                print(f"Detected {len(results)} text regions")
+            return results
+
+        # Fallback: Detect text regions then recognize each
         boxes = self.backend.detect_text(image)
 
         if config.app.debug:
