@@ -78,8 +78,44 @@ ocr = OCRConfig()
 app = AppConfig()
 
 
+def setup_voyager_env() -> bool:
+    """Setup Voyager SDK environment for Metis access from ocr-test venv.
+
+    Returns True if setup successful, False otherwise.
+    """
+    import sys
+
+    # Check if already configured
+    if os.environ.get('AXELERA_FRAMEWORK'):
+        return True
+
+    # Setup paths
+    voyager_site_packages = VOYAGER_SDK_DIR / "venv" / "lib" / "python3.10" / "site-packages"
+
+    if not voyager_site_packages.exists():
+        return False
+
+    # Add voyager-sdk site-packages to Python path
+    site_pkg_str = str(voyager_site_packages)
+    if site_pkg_str not in sys.path:
+        sys.path.insert(0, site_pkg_str)
+
+    # Set environment variables
+    os.environ['AXELERA_FRAMEWORK'] = str(VOYAGER_SDK_DIR)
+
+    # Add ax_models to path
+    ax_models_path = str(VOYAGER_SDK_DIR / "ax_models")
+    if ax_models_path not in sys.path:
+        sys.path.insert(0, ax_models_path)
+
+    return True
+
+
 def check_voyager_env() -> bool:
-    """Check if Voyager SDK environment is active (for Metis mode)."""
+    """Check if Voyager SDK environment is available (for Metis mode)."""
+    # Try to setup if not already done
+    if not os.environ.get('AXELERA_FRAMEWORK'):
+        setup_voyager_env()
     return os.environ.get('AXELERA_FRAMEWORK') is not None
 
 
