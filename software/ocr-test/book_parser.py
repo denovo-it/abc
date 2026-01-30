@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-Parser to extract title, author, and publisher from book covers.
-Uses heuristics based on position, size, and text content.
+Parser per estrarre titolo, autore ed editore da copertine di libri.
+Usa euristiche basate su posizione, dimensione e raggruppamento del testo.
+Versione autonoma senza dipendenze da LLM.
 """
 
 import re
 from dataclasses import dataclass, field
+from typing import List, Tuple
 
 from ocr_pipeline import TextBox
 import config
@@ -13,7 +15,7 @@ import config
 
 @dataclass
 class BookInfo:
-    """Information extracted from book cover."""
+    """Informazioni estratte dalla copertina."""
     title: str = ""
     author: str = ""
     publisher: str = ""
@@ -21,27 +23,34 @@ class BookInfo:
     raw_texts: list[TextBox] = field(default_factory=list)
 
 
-# Common publisher patterns (Italian and international)
+# Pattern editori (italiano e internazionale)
 PUBLISHER_PATTERNS = [
-    r'\b(mondadori|feltrinelli|einaudi|adelphi|bompiani|rizzoli)\b',
-    r'\b(garzanti|laterza|sellerio|newton|compton|piemme)\b',
-    r'\b(longanesi|sperling|kupfer|mursia|giunti|hoepli)\b',
-    r'\b(penguin|random\s*house|harper|collins|simon|schuster)\b',
-    r'\b(macmillan|hachette|wiley|pearson|springer)\b',
-    r'\b(edizioni?|editore|editori|editor[ie]|casa\s+editrice)\b',
-    r'\b(publisher|publishing|press|books?|verlag)\b',
+    r"\b(mondadori|feltrinelli|einaudi|adelphi|bompiani|rizzoli)\b",
+    r"\b(garzanti|laterza|sellerio|newton|compton|piemme)\b",
+    r"\b(longanesi|sperling|kupfer|mursia|giunti|hoepli)\b",
+    r"\b(penguin|random\s*house|harper|collins|simon|schuster)\b",
+    r"\b(macmillan|hachette|wiley|pearson|springer)\b",
+    r"\b(edizioni?|editore|editori|casa\s+editrice)\b",
+    r"\b(publisher|publishing|press|books?|verlag)\b",
+    r"\b(oscar|bestsellers|tascabili|classici)\b",
 ]
 
-# Patterns to identify author names
+# Pattern per identificare nomi di autori
 AUTHOR_PATTERNS = [
-    r'^[A-Z][a-z]+\s+[A-Z][a-z]+$',  # First Last
-    r'^[A-Z]\.\s*[A-Z][a-z]+$',  # J. Smith
-    r'^[A-Z][a-z]+\s+[A-Z]\.\s*[A-Z][a-z]+$',  # John R. Smith
+    r"^[A-Z][a-z]+\s+[A-Z]\.?\s*[A-Z][a-z]+$",  # Nome I. Cognome
+    r"^[A-Z][a-z]+\s+[A-Z][a-z]+$",  # Nome Cognome
+    r"^[A-Z]\.\s*[A-Z][a-z]+$",  # J. Smith
+    r"^[A-Z][a-z]+\s+[A-Z][a-z]+\s+[A-Z][a-z]+$",  # Nome Secondo Cognome
 ]
+
+# Parole da escludere (rumore comune)
+NOISE_WORDS = {
+    "orange", "pi", "the", "a", "an", "il", "la", "lo", "le", "gli", "un", "una",
+}
 
 
 def is_likely_publisher(text: str) -> bool:
-    """Check if text looks like a publisher name."""
+    """Verifica se il testo sembra un editore."""
     text_lower = text.lower()
     for pattern in PUBLISHER_PATTERNS:
         if re.search(pattern, text_lower):
@@ -50,197 +59,256 @@ def is_likely_publisher(text: str) -> bool:
 
 
 def is_likely_author(text: str) -> bool:
-    """Check if text looks like an author name."""
-    # Too short or too long
-    if len(text) < 5 or len(text) > 50:
+    """Verifica se il testo sembra un nome di autore."""
+    text_clean = text.strip()
+    
+    if len(text_clean) < 5 or len(text_clean) > 50:
         return False
-
-    # Contains numbers -> probably not an author
-    if re.search(r'\d', text):
+    
+    if re.search(r"\d", text_clean):
         return False
-
-    # Match typical patterns
+    
     for pattern in AUTHOR_PATTERNS:
-        if re.match(pattern, text):
+        if re.match(pattern, text_clean):
             return True
-
-    # Two or three words starting with uppercase
-    words = text.split()
+    
+    words = text_clean.split()
     if 2 <= len(words) <= 4:
-        if all(w[0].isupper() for w in words if w):
-            return True
-
+        if all(w[0].isupper() for w in words if len(w) > 1):
+            # Verifica che non siano tutte maiuscole (titolo) 
+            if not all(w.isupper() for w in words):
+                return True
+            # Se sono 2-3 parole tutte maiuscole, potrebbe essere autore
+            if len(words) <= 3:
+                return True
+    
     return False
 
 
+def is_noise(text: str) -> bool:
+    """Verifica se il testo e rumore da ignorare."""
+    text_lower = text.lower().strip()
+    
+    if len(text_lower) <= 2:
+        return True
+    
+    if text_lower in NOISE_WORDS:
+        return True
+    
+    if re.match(r"^[^a-zA-Z]*$", text):
+        return True
+    
+    if "orange pi" in text_lower:
+        return True
+    
+    return False
+
+
+def boxes_on_same_line(box1: TextBox, box2: TextBox, tolerance: float = 0.5) -> bool:
+    """Verifica se due box sono sulla stessa riga."""
+    y1_center = (box1.bbox[1] + box1.bbox[3]) / 2
+    y2_center = (box2.bbox[1] + box2.bbox[3]) / 2
+    
+    h1 = box1.bbox[3] - box1.bbox[1]
+    h2 = box2.bbox[3] - box2.bbox[1]
+    avg_height = (h1 + h2) / 2
+    
+    return abs(y1_center - y2_center) < avg_height * tolerance
+
+
+def merge_boxes_into_lines(boxes: List[TextBox]) -> List[TextBox]:
+    """Raggruppa i box sulla stessa riga e li unisce."""
+    if not boxes:
+        return []
+    
+    # Ordina per posizione Y
+    sorted_boxes = sorted(boxes, key=lambda b: b.bbox[1])
+    
+    lines = []
+    current_line = [sorted_boxes[0]]
+    
+    for box in sorted_boxes[1:]:
+        if boxes_on_same_line(current_line[0], box):
+            current_line.append(box)
+        else:
+            lines.append(current_line)
+            current_line = [box]
+    
+    if current_line:
+        lines.append(current_line)
+    
+    # Unisci i box di ogni riga
+    merged = []
+    for line in lines:
+        # Ordina per X (sinistra -> destra)
+        line_sorted = sorted(line, key=lambda b: b.bbox[0])
+        
+        # Unisci testo
+        texts = [b.text for b in line_sorted]
+        combined_text = " ".join(texts)
+        
+        # Calcola bbox combinato
+        x1 = min(b.bbox[0] for b in line_sorted)
+        y1 = min(b.bbox[1] for b in line_sorted)
+        x2 = max(b.bbox[2] for b in line_sorted)
+        y2 = max(b.bbox[3] for b in line_sorted)
+        
+        # Confidence media
+        avg_conf = sum(b.confidence for b in line_sorted) / len(line_sorted)
+        
+        merged.append(TextBox(
+            bbox=(x1, y1, x2, y2),
+            text=combined_text,
+            confidence=avg_conf
+        ))
+    
+    return merged
+
+
 def calculate_text_prominence(box: TextBox, image_height: int, image_width: int) -> float:
-    """
-    Calculate a prominence score for text.
-    Considers box size, position, and text length.
-    """
+    """Calcola un punteggio di prominenza per il testo."""
     x1, y1, x2, y2 = box.bbox
     box_height = y2 - y1
     box_width = x2 - x1
-
-    # Normalize dimensions
+    
     height_ratio = box_height / image_height
     width_ratio = box_width / image_width
-
-    # Relative area
     area_score = height_ratio * width_ratio * 10
-
-    # Vertical position (center = more important for title)
+    
     center_y = (y1 + y2) / 2
     center_ratio = center_y / image_height
-    # Max score for text in central third
+    
     if 0.25 <= center_ratio <= 0.6:
         position_score = 1.0
     elif 0.15 <= center_ratio <= 0.75:
         position_score = 0.7
     else:
         position_score = 0.3
-
-    # Text length
+    
     text_len = len(box.text)
-    if text_len > 5:
-        length_score = min(text_len / 30, 1.0)
-    else:
-        length_score = 0.2
-
-    # Combine scores
+    length_score = min(text_len / 30, 1.0) if text_len > 3 else 0.2
+    
     prominence = (
-        area_score * 0.4 +
-        position_score * 0.3 +
-        length_score * 0.2 +
-        box.confidence * 0.1
+        area_score * 0.35 +
+        position_score * 0.25 +
+        length_score * 0.25 +
+        box.confidence * 0.15
     )
-
+    
     return prominence
 
 
 def parse_book_cover(
-    text_boxes: list[TextBox],
+    text_boxes: List[TextBox],
     image_height: int,
     image_width: int
 ) -> BookInfo:
     """
-    Analyze extracted texts and identify title, author, and publisher.
-
-    Args:
-        text_boxes: List of TextBox from OCR
-        image_height: Original image height
-        image_width: Original image width
-
-    Returns:
-        BookInfo with extracted information
+    Analizza i testi estratti e identifica titolo, autore ed editore.
+    
+    Pipeline:
+    1. Filtra rumore
+    2. Raggruppa box sulla stessa riga
+    3. Identifica editore (pattern + posizione bassa)
+    4. Identifica autore (pattern nome)
+    5. Il resto e titolo (prominenza)
     """
     if not text_boxes:
         return BookInfo()
-
+    
+    # 1. Filtra rumore
+    filtered = [box for box in text_boxes if not is_noise(box.text)]
+    
+    if not filtered:
+        return BookInfo(raw_texts=text_boxes)
+    
+    # 2. Raggruppa box sulla stessa riga
+    merged = merge_boxes_into_lines(filtered)
+    
     book = BookInfo(raw_texts=text_boxes)
-
-    # Calculate prominence for each box
-    scored_boxes = []
-    for box in text_boxes:
-        prominence = calculate_text_prominence(box, image_height, image_width)
-        scored_boxes.append((box, prominence))
-
-    # Sort by prominence
-    scored_boxes.sort(key=lambda x: x[1], reverse=True)
-
-    # Identify publisher (usually at bottom)
-    for box, _ in scored_boxes:
+    
+    # 3. Calcola prominenza
+    scored = []
+    for box in merged:
+        score = calculate_text_prominence(box, image_height, image_width)
+        scored.append((box, score))
+    
+    scored.sort(key=lambda x: x[1], reverse=True)
+    
+    used_texts = set()
+    
+    # 4. Identifica editore (pattern o posizione bassa)
+    for box, _ in scored:
         if is_likely_publisher(box.text):
             book.publisher = box.text
+            used_texts.add(box.text)
             break
-
-    # If not found with pattern, look at bottom
+    
     if not book.publisher:
         bottom_boxes = [
-            (box, score) for box, score in scored_boxes
-            if box.bbox[1] > image_height * 0.7  # In bottom 30%
+            (box, score) for box, score in scored
+            if box.bbox[1] > image_height * 0.75
         ]
         if bottom_boxes:
-            # Take most prominent text at bottom
             book.publisher = bottom_boxes[0][0].text
-
-    # Identify author
-    for box, _ in scored_boxes:
-        if box.text == book.publisher:
+            used_texts.add(book.publisher)
+    
+    # 5. Identifica autore
+    for box, _ in scored:
+        if box.text in used_texts:
             continue
         if is_likely_author(box.text):
             book.author = box.text
+            used_texts.add(box.text)
             break
-
-    # If not found, look at top
+    
+    # Se non trovato, cerca in alto
     if not book.author:
         top_boxes = [
-            (box, score) for box, score in scored_boxes
-            if box.bbox[3] < image_height * 0.3  # In top 30%
-            and box.text != book.publisher
+            (box, score) for box, score in scored
+            if box.bbox[3] < image_height * 0.35
+            and box.text not in used_texts
         ]
-        if top_boxes:
-            # Prefer short texts (names)
-            for box, _ in top_boxes:
-                if len(box.text.split()) <= 4:
-                    book.author = box.text
-                    break
-
-    # Identify title (most prominent remaining text)
-    for box, score in scored_boxes:
-        if box.text not in (book.author, book.publisher):
-            book.title = box.text
-            book.confidence = score
-            break
-
+        for box, _ in top_boxes:
+            words = box.text.split()
+            if 2 <= len(words) <= 4:
+                book.author = box.text
+                used_texts.add(box.text)
+                break
+    
+    # 6. Identifica titolo (testo piu prominente rimanente)
+    title_parts = []
+    for box, score in scored:
+        if box.text in used_texts:
+            continue
+        # Aggiungi al titolo se nella zona centrale
+        center_y = (box.bbox[1] + box.bbox[3]) / 2
+        if 0.2 < center_y / image_height < 0.85:
+            title_parts.append((box, score))
+            used_texts.add(box.text)
+    
+    if title_parts:
+        # Ordina per posizione Y per ricostruire ordine
+        title_parts.sort(key=lambda x: x[0].bbox[1])
+        book.title = " ".join(box.text for box, _ in title_parts)
+        book.confidence = sum(score for _, score in title_parts) / len(title_parts)
+    
     return book
 
 
 def format_book_info(book: BookInfo) -> str:
-    """Format book info for output."""
+    """Formatta le info del libro per output."""
     lines = []
     lines.append("=" * 50)
     lines.append("BOOK INFORMATION")
     lines.append("=" * 50)
-
-    if book.title:
-        lines.append(f"Title:     {book.title}")
-    else:
-        lines.append("Title:     [not identified]")
-
-    if book.author:
-        lines.append(f"Author:    {book.author}")
-    else:
-        lines.append("Author:    [not identified]")
-
-    if book.publisher:
-        lines.append(f"Publisher: {book.publisher}")
-    else:
-        lines.append("Publisher: [not identified]")
-
+    
+    lines.append(f"Title:     {book.title or [not identified]}")
+    lines.append(f"Author:    {book.author or [not identified]}")
+    lines.append(f"Publisher: {book.publisher or [not identified]}")
+    
     lines.append("-" * 50)
     lines.append(f"Confidence: {book.confidence:.2f}")
     lines.append("=" * 50)
-
+    
     return "\n".join(lines)
-
-
-def main():
-    """Test parser with sample data."""
-    # Test data
-    test_boxes = [
-        TextBox(bbox=(50, 20, 350, 60), text="Stephen King", confidence=0.9),
-        TextBox(bbox=(30, 100, 370, 200), text="IT", confidence=0.95),
-        TextBox(bbox=(100, 450, 300, 480), text="Sperling & Kupfer", confidence=0.85),
-    ]
-
-    book = parse_book_cover(test_boxes, image_height=500, image_width=400)
-    print(format_book_info(book))
-
-    print("\nRaw texts:")
-    for box in book.raw_texts:
-        print(f"  - {box.text} @ {box.bbox}")
-
-
-if __name__ == "__main__":
-    main()

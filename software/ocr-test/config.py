@@ -56,6 +56,9 @@ class OCRConfig:
     mean: tuple = (127.5, 127.5, 127.5)
     std: tuple = (127.5, 127.5, 127.5)
 
+    # Preprocessing (applied to crops before recognition)
+    enable_preprocessing: bool = True
+
     # Model paths
     det_model_path: Path = MODELS_DIR / "ch_PP-OCRv3_det_infer.onnx"
     rec_model_path: Path = MODELS_DIR / "latin_PP-OCRv3_rec_infer.onnx"
