@@ -16,6 +16,13 @@ from capture import capture_frame, capture_from_file, save_frame
 from ocr_pipeline import OCRPipeline, TextBox
 from book_parser import parse_book_cover, format_book_info, BookInfo
 
+# LLM correction (optional)
+try:
+    from llm_correction import correct_book_info, check_ollama_running
+    HAS_LLM = True
+except ImportError:
+    HAS_LLM = False
+
 
 def draw_results(image: np.ndarray, book: BookInfo) -> np.ndarray:
     """
@@ -88,7 +95,8 @@ def process_single_image(
     image: np.ndarray,
     pipeline: OCRPipeline,
     show: bool = True,
-    save_path: Path = None
+    save_path: Path = None,
+    use_llm: bool = False
 ) -> BookInfo:
     """
     Process a single image.
@@ -98,6 +106,7 @@ def process_single_image(
         pipeline: Initialized OCR pipeline
         show: Whether to show result
         save_path: Path to save result
+        use_llm: Whether to use LLM for text correction
 
     Returns:
         BookInfo with extracted data
@@ -111,6 +120,22 @@ def process_single_image(
 
     # Parse book info
     book = parse_book_cover(text_boxes, h, w)
+
+    # LLM correction (optional)
+    if use_llm and HAS_LLM:
+        print("\nApplying LLM correction...")
+        llm_result = correct_book_info(text_boxes, debug=config.app.debug)
+        if llm_result:
+            # Update book info with LLM corrections
+            if llm_result.title:
+                book.title = llm_result.title
+            if llm_result.author:
+                book.author = llm_result.author
+            if llm_result.publisher:
+                book.publisher = llm_result.publisher
+            print(f"LLM confidence: {llm_result.confidence:.2f}")
+    elif use_llm and not HAS_LLM:
+        print("\n[WARN] LLM correction requested but llm_correction module not available")
 
     # Text output
     print("\n" + format_book_info(book))
@@ -332,9 +357,19 @@ def main():
         help="Use EasyOCR (requires PyTorch, heavy memory usage)"
     )
     parser.add_argument(
+        "--hybrid",
+        action="store_true",
+        help="Use PP-OCR detection + Tesseract recognition (best for book covers)"
+    )
+    parser.add_argument(
         "-d", "--debug",
         action="store_true",
         help="Enable debug"
+    )
+    parser.add_argument(
+        "--llm",
+        action="store_true",
+        help="Use LLM (Ollama) for OCR text correction"
     )
     args = parser.parse_args()
 
@@ -348,12 +383,24 @@ def main():
     print("=" * 50)
     print()
 
+    # Check LLM availability if requested
+    if args.llm:
+        if not HAS_LLM:
+            print("Error: LLM module not available. Install required dependencies.")
+            sys.exit(1)
+        if not check_ollama_running():
+            print("Error: Ollama is not running. Start it with: ollama serve")
+            sys.exit(1)
+        print("LLM correction enabled (Ollama)")
+
     # Initialize pipeline
     # Default to PP-OCR (lightweight ONNX) instead of EasyOCR (heavy PyTorch)
     # to avoid excessive memory usage that can crash the board.
     # Use --easyocr to explicitly enable EasyOCR if needed.
-    use_easyocr = args.easyocr and not (args.metis or args.tesseract or args.ppocr)
-    if args.metis:
+    use_easyocr = args.easyocr and not (args.metis or args.tesseract or args.ppocr or args.hybrid)
+    if args.hybrid:
+        backend_name = "Hybrid (PP-OCR det + Tesseract rec)"
+    elif args.metis:
         backend_name = "Metis + Tesseract"
     elif args.tesseract:
         backend_name = "Tesseract"
@@ -366,7 +413,8 @@ def main():
         pipeline = OCRPipeline(
             use_metis=args.metis,
             use_tesseract=args.tesseract,
-            use_easyocr=use_easyocr
+            use_easyocr=use_easyocr,
+            use_hybrid=args.hybrid,
         )
     except Exception as e:
         print(f"Error: {e}")
@@ -397,7 +445,8 @@ def main():
         process_single_image(
             image, pipeline,
             show=not args.no_display,
-            save_path=output_path
+            save_path=output_path,
+            use_llm=args.llm
         )
     else:
         # Single capture from camera
@@ -421,7 +470,8 @@ def main():
         process_single_image(
             image, pipeline,
             show=not args.no_display,
-            save_path=output_path
+            save_path=output_path,
+            use_llm=args.llm
         )
 
 

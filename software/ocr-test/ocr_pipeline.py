@@ -14,6 +14,13 @@ import cv2
 import numpy as np
 
 import config
+from preprocessing import TextPreprocessor
+# Text correction post-processing
+try:
+    from text_correction import correct_textbox_list
+    HAS_TEXT_CORRECTION = True
+except ImportError:
+    HAS_TEXT_CORRECTION = False
 
 # Try to import ONNX Runtime
 try:
@@ -364,7 +371,16 @@ class ONNXBackend(OCRBackend):
         if self.rec_session is None:
             return "", 0.0
 
-        input_tensor = self._preprocess_recognition(image)
+        # Apply preprocessing if enabled
+        img = image
+        if config.ocr.enable_preprocessing:
+            preprocessor = TextPreprocessor(
+                binarize=False,  # PP-OCR does its own normalization
+                debug=config.app.debug,
+            )
+            img = preprocessor.process(img)
+
+        input_tensor = self._preprocess_recognition(img)
 
         input_name = self.rec_session.get_inputs()[0].name
         output = self.rec_session.run(None, {input_name: input_tensor})
@@ -428,10 +444,19 @@ class TesseractBackend(OCRBackend):
 
     def recognize_text(self, image: np.ndarray) -> tuple[str, float]:
         """Recognize text using Tesseract."""
-        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        # Apply preprocessing if enabled
+        img = image
+        if config.ocr.enable_preprocessing:
+            preprocessor = TextPreprocessor(
+                binarize=True,  # Tesseract benefits from binarization
+                debug=config.app.debug,
+            )
+            img = preprocessor.process(img)
+
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
         # Determine PSM based on image size
-        h, w = image.shape[:2]
+        h, w = img.shape[:2]
         if h < 50:
             psm = '7'  # Single line
         elif w > h * 3:
@@ -506,9 +531,15 @@ class TesseractBackend(OCRBackend):
 
 
 class EasyOCRBackend(OCRBackend):
-    """EasyOCR backend - robust for illustrated covers and stylized fonts."""
+    """EasyOCR backend - robust for illustrated covers and stylized fonts.
+
+    Images are downscaled to max_dimension before inference to keep
+    memory usage under ~1 GB (vs ~2.4 GB at 1920x1080).  Bounding box
+    coordinates are scaled back to the original resolution.
+    """
 
     _reader = None  # Class-level reader to avoid reloading models
+    MAX_DIMENSION = 1920  # Full resolution for better accuracy  # Max long-side pixels for inference
 
     def __init__(self, languages: list = None):
         if not HAS_EASYOCR:
@@ -529,9 +560,27 @@ class EasyOCRBackend(OCRBackend):
         if config.app.debug:
             print("EasyOCR backend initialized")
 
+    def _downscale(self, image: np.ndarray) -> tuple[np.ndarray, float]:
+        """Downscale image so the long side <= MAX_DIMENSION.
+
+        Returns (resized_image, scale_factor).  scale_factor is used to
+        map bbox coordinates back to original resolution.
+        """
+        h, w = image.shape[:2]
+        long_side = max(h, w)
+        if long_side <= self.MAX_DIMENSION:
+            return image, 1.0
+        scale = self.MAX_DIMENSION / long_side
+        resized = cv2.resize(image, (int(w * scale), int(h * scale)))
+        if config.app.debug:
+            rh, rw = resized.shape[:2]
+            print(f"  [easyocr] downscale {w}x{h} -> {rw}x{rh} (scale={scale:.2f})")
+        return resized, scale
+
     def detect_text(self, image: np.ndarray) -> list[tuple[int, int, int, int]]:
         """Detect text regions using EasyOCR."""
-        results = EasyOCRBackend._reader.readtext(image)
+        small, scale = self._downscale(image)
+        results = EasyOCRBackend._reader.readtext(small, adjust_contrast=0.7)
 
         boxes = []
         for bbox, text, conf in results:
@@ -539,15 +588,18 @@ class EasyOCRBackend(OCRBackend):
                 # bbox is [[x1,y1], [x2,y1], [x2,y2], [x1,y2]]
                 xs = [p[0] for p in bbox]
                 ys = [p[1] for p in bbox]
-                x1, y1 = int(min(xs)), int(min(ys))
-                x2, y2 = int(max(xs)), int(max(ys))
+                x1 = int(min(xs) / scale)
+                y1 = int(min(ys) / scale)
+                x2 = int(max(xs) / scale)
+                y2 = int(max(ys) / scale)
                 boxes.append((x1, y1, x2, y2))
 
         return boxes if boxes else [(0, 0, image.shape[1], image.shape[0])]
 
     def recognize_text(self, image: np.ndarray) -> tuple[str, float]:
         """Recognize text using EasyOCR."""
-        results = EasyOCRBackend._reader.readtext(image)
+        small, _ = self._downscale(image)
+        results = EasyOCRBackend._reader.readtext(small, adjust_contrast=0.7)
 
         if not results:
             return "", 0.0
@@ -567,9 +619,10 @@ class EasyOCRBackend(OCRBackend):
 
     def process_full_image(self, image: np.ndarray) -> list:
         """Process full image and return TextBox list directly."""
-        results = EasyOCRBackend._reader.readtext(image)
+        small, scale = self._downscale(image)
+        results = EasyOCRBackend._reader.readtext(small, adjust_contrast=0.7)
 
-        # Group by lines (similar y position)
+        # Group by lines (similar y position) — coordinates in original space
         lines = {}
         for bbox, text, conf in results:
             if conf < 0.2 or not text.strip():
@@ -577,14 +630,17 @@ class EasyOCRBackend(OCRBackend):
 
             xs = [p[0] for p in bbox]
             ys = [p[1] for p in bbox]
-            x1, y1 = int(min(xs)), int(min(ys))
-            x2, y2 = int(max(xs)), int(max(ys))
+            x1 = int(min(xs) / scale)
+            y1 = int(min(ys) / scale)
+            x2 = int(max(xs) / scale)
+            y2 = int(max(ys) / scale)
             cy = (y1 + y2) // 2  # Center y
 
-            # Find existing line within 30px
+            # Find existing line within 30px (original space)
+            merge_threshold = int(30 / scale) if scale < 1.0 else 30
             found_line = None
             for line_y in lines:
-                if abs(line_y - cy) < 30:
+                if abs(line_y - cy) < merge_threshold:
                     found_line = line_y
                     break
 
@@ -701,11 +757,65 @@ class MetisBackend(OCRBackend):
         return text, conf
 
 
+class HybridBackend(OCRBackend):
+    """Hybrid backend: PP-OCR detection + Tesseract recognition.
+
+    Uses the reliable PP-OCR ONNX detection model to find text regions,
+    then applies preprocessing and Tesseract recognition on each crop.
+    This combination handles stylized book-cover fonts better than
+    PP-OCR recognition alone.
+    """
+
+    def __init__(self):
+        if not HAS_ONNX:
+            raise RuntimeError("onnxruntime not installed (needed for PP-OCR detection)")
+        if not HAS_TESSERACT:
+            raise RuntimeError("pytesseract not installed (needed for recognition)")
+
+        self._detector = ONNXBackend()
+        self._preprocessor = TextPreprocessor(
+            binarize=True,
+            debug=config.app.debug,
+        )
+
+        if config.app.debug:
+            print("Hybrid backend initialized (PP-OCR det + Tesseract rec)")
+
+    def detect_text(self, image: np.ndarray) -> list[tuple[int, int, int, int]]:
+        """Detect text regions using PP-OCR ONNX model."""
+        return self._detector.detect_text(image)
+
+    def recognize_text(self, image: np.ndarray) -> tuple[str, float]:
+        """Recognize text in a crop using preprocessing + Tesseract."""
+        # Always preprocess in hybrid mode (that's the point)
+        img = self._preprocessor.process(image)
+
+        rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        h, w = img.shape[:2]
+        psm = '7' if h < 50 or w > h * 3 else '6'
+
+        text = pytesseract.image_to_string(rgb, lang='ita+eng', config=f'--psm {psm}')
+        text = text.strip()
+
+        try:
+            data = pytesseract.image_to_data(
+                rgb, lang='ita+eng',
+                output_type=pytesseract.Output.DICT,
+                config=f'--psm {psm}',
+            )
+            confs = [int(c) for c in data['conf'] if int(c) > 0]
+            conf = sum(confs) / len(confs) / 100.0 if confs else 0.5
+        except Exception:
+            conf = 0.5
+
+        return text, conf
+
+
 class OCRPipeline:
     """OCR Pipeline with backend selection."""
 
     def __init__(self, use_metis: bool = False, use_tesseract: bool = False,
-                 use_easyocr: bool = True):
+                 use_easyocr: bool = True, use_hybrid: bool = False):
         """
         Initialize OCR pipeline.
 
@@ -713,8 +823,11 @@ class OCRPipeline:
             use_metis: If True, use Metis hardware acceleration for detection
             use_tesseract: If True, use Tesseract for recognition
             use_easyocr: If True, use EasyOCR (default, best for illustrated covers)
+            use_hybrid: If True, use PP-OCR detection + Tesseract recognition
         """
-        if use_metis:
+        if use_hybrid:
+            self.backend = HybridBackend()
+        elif use_metis:
             # Metis for detection + Tesseract for recognition
             self.backend = MetisBackend()
         elif use_easyocr:
@@ -739,8 +852,12 @@ class OCRPipeline:
             results = self.backend.process_full_image(image)
             if config.app.debug:
                 print(f"Detected {len(results)} text regions")
+            # Apply text correction
+            if HAS_TEXT_CORRECTION:
+                if config.app.debug:
+                    print("Applying text corrections...")
+                results = correct_textbox_list(results, debug=config.app.debug)
             return results
-
         # Fallback: Detect text regions then recognize each
         boxes = self.backend.detect_text(image)
 
@@ -769,6 +886,12 @@ class OCRPipeline:
         # Sort by vertical position
         results.sort(key=lambda b: b.bbox[1])
 
+
+        # Apply text correction post-processing
+        if HAS_TEXT_CORRECTION:
+            if config.app.debug:
+                print("Applying text corrections...")
+            results = correct_textbox_list(results, debug=config.app.debug)
         return results
 
 
