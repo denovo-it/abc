@@ -1,0 +1,230 @@
+# Publishers database for OCR validation
+# Curated list of major Italian and international publishers
+# Total entries: ~200
+#
+# Format: One publisher name per line (uppercase)
+
+# ============================================================================
+# ITALIAN PUBLISHERS (Casa Editrici Italiane)
+# ============================================================================
+
+# Major Groups
+MONDADORI
+RIZZOLI
+FELTRINELLI
+EINAUDI
+GARZANTI
+LONGANESI
+SPERLING & KUPFER
+BOMPIANI
+FRASSINELLI
+
+# Literary Publishers
+ADELPHI
+SELLERIO
+MARSILIO
+BOLLATI BORINGHIERI
+NERI POZZA
+NOTTETEMPO
+MINIMUM FAX
+NN EDITORE
+IPERBOREA
+KELLER
+FAZI
+PIEMME
+GUANDA
+PONTE ALLE GRAZIE
+E/O
+
+# Large Publishers
+GRUPPO EDITORIALE MAURI SPAGNOL
+GIUNTI
+DE AGOSTINI
+SALANI
+RUSCONI
+MURSIA
+UTET
+
+# Paperback/Popular
+NEWTON COMPTON
+TEA
+BUR
+OSCAR MONDADORI
+SUPER ET
+TASCABILI
+ECONOMICI
+
+# Genre Specialists
+NORD (Fantasy/SF)
+FANUCCI
+GARGOYLE
+DELOS BOOKS
+GALAXY PRESS
+
+# Non-Fiction
+IL MULINO
+LATERZA
+CAROCCI
+DONZELLI
+DEDALO
+HOEPLI
+ZANICHELLI
+
+# Children/YA
+GIUNTI KIDS
+MONDADORI RAGAZZI
+SALANI EDITORE
+PIEMME JUNIOR
+DE AGOSTINI RAGAZZI
+
+# Comics/Graphic Novels
+PANINI COMICS
+BONELLI
+COCONINO PRESS
+BAO PUBLISHING
+
+# Regional/Small
+SELLERIO EDITORE PALERMO
+MARCOS Y MARCOS
+PLAYGROUND
+ELLIOT
+SEM
+VOLAND
+
+# ============================================================================
+# INTERNATIONAL PUBLISHERS
+# ============================================================================
+
+# UK/USA Major
+PENGUIN
+PENGUIN RANDOM HOUSE
+RANDOM HOUSE
+HARPERCOLLINS
+SIMON & SCHUSTER
+MACMILLAN
+HACHETTE
+BLOOMSBURY
+FABER AND FABER
+VINTAGE
+PICADOR
+
+# Literary
+JONATHAN CAPE
+CHATTO & WINDUS
+HAMISH HAMILTON
+GRANTA
+CANONGATE
+
+# Paperback/Popular
+BANTAM
+DELL
+BALLANTINE
+TOR
+DAW
+ACE
+
+# Academic/Non-Fiction
+OXFORD UNIVERSITY PRESS
+CAMBRIDGE UNIVERSITY PRESS
+YALE UNIVERSITY PRESS
+MIT PRESS
+HARVARD UNIVERSITY PRESS
+PRINCETON UNIVERSITY PRESS
+
+# Children
+SCHOLASTIC
+PUFFIN
+WALKER BOOKS
+EGMONT
+
+# USA Publishers
+KNOPF
+DOUBLEDAY
+SCRIBNER
+PUTNAM
+GROVE PRESS
+FARRAR STRAUS GIROUX
+LITTLE BROWN
+VIKING
+CROWN
+ST MARTIN'S PRESS
+WILLIAM MORROW
+
+# ============================================================================
+# FRENCH PUBLISHERS (Éditeurs Français)
+# ============================================================================
+
+GALLIMARD
+GRASSET
+ALBIN MICHEL
+ACTES SUD
+SEUIL
+FLAMMARION
+FAYARD
+PLON
+CALMANN-LÉVY
+ÉDITIONS DE MINUIT
+POL
+MERCURE DE FRANCE
+
+# ============================================================================
+# GERMAN PUBLISHERS (Deutsche Verlage)
+# ============================================================================
+
+SUHRKAMP
+FISCHER
+ROWOHLT
+ULLSTEIN
+HANSER
+DIOGENES
+PIPER
+
+# ============================================================================
+# SPANISH PUBLISHERS (Editoriales Españolas)
+# ============================================================================
+
+ANAGRAMA
+ALFAGUARA
+TUSQUETS
+SEIX BARRAL
+PLANETA
+LUMEN
+SALAMANDRA
+
+# ============================================================================
+# IMPRINTS & SERIES (Often appear on covers)
+# ============================================================================
+
+OSCAR
+BUR RIZZOLI
+SUPER ET
+VINTAGE CLASSICS
+PENGUIN CLASSICS
+MODERN CLASSICS
+EVERYMAN'S LIBRARY
+OXFORD WORLD'S CLASSICS
+PENGUIN MODERN CLASSICS
+VINTAGE CONTEMPORARIES
+PICADOR MODERN CLASSICS
+
+# ============================================================================
+# GENERIC PUBLISHER KEYWORDS (for pattern matching)
+# ============================================================================
+
+EDITORE
+EDITORI
+EDITRICE
+EDIZIONI
+CASA EDITRICE
+EDITOR
+EDITORS
+PUBLISHING
+PUBLISHERS
+PUBLICATIONS
+PRESS
+BOOKS
+LIBRI
+VERLAG
+VERLAGE
+ÉDITIONS
+EDITORIAL
