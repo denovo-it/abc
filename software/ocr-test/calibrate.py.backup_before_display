@@ -3,99 +3,14 @@
 Automatic calibration of loading area using 4 X markers.
 Detects X markers at corners and saves configuration.
 
-Usage: python3 calibrate.py [--debug] [--no-display]
-
-Options:
-    --debug        Save intermediate debug images
-    --no-display   Never show preview window (use in headless mode)
+Usage: python3 calibrate.py [--debug]
 """
-
-import os
-# Suppress fontconfig warnings
-os.environ['QT_LOGGING_RULES'] = '*.debug=false;qt.qpa.*=false'
 
 import cv2
 import numpy as np
 import sys
+import os
 import argparse
-import subprocess
-
-# Suppress OpenCV warnings
-import warnings
-warnings.filterwarnings('ignore', category=UserWarning)
-
-
-# ============================================================================
-# DISPLAY UTILITIES
-# ============================================================================
-
-def has_display():
-    """Check if we're running in a graphical environment"""
-    if os.environ.get('DISPLAY'):
-        return True
-    if os.environ.get('WAYLAND_DISPLAY'):
-        return True
-    if sys.platform == 'darwin':
-        return True
-    if sys.platform == 'win32':
-        return True
-    return False
-
-
-def can_show_gui():
-    """Check if we can show images (have display + viewer)"""
-    if not has_display():
-        return False
-    # Check for image viewers
-    for viewer in ['feh', 'eog', 'gpicview', 'xdg-open']:
-        try:
-            result = subprocess.run(['which', viewer], capture_output=True)
-            if result.returncode == 0:
-                return True
-        except:
-            pass
-    return False
-
-
-def show_image(title, image, wait_key=True):
-    """
-    Show image using external viewer (OpenCV GUI not available in venv).
-
-    Returns:
-        True if image was shown, False otherwise
-    """
-    try:
-        # Save to temp file
-        temp_path = '/tmp/calibration_preview_temp.jpg'
-        cv2.imwrite(temp_path, image)
-
-        # Try to open with available viewer
-        viewers = ['feh', 'eog', 'gpicview', 'xdg-open']
-        opened = False
-
-        for viewer in viewers:
-            try:
-                result = subprocess.run(['which', viewer], capture_output=True)
-                if result.returncode == 0:
-                    subprocess.Popen(
-                        [viewer, temp_path],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL
-                    )
-                    opened = True
-                    break
-            except:
-                continue
-
-        if opened and wait_key:
-            print("")
-            print("Preview opened in external viewer.")
-            input("Press ENTER here to continue...")
-
-        return opened
-    except Exception as e:
-        print("Cannot show preview: " + str(e))
-        return False
 
 
 # ============================================================================
@@ -238,7 +153,7 @@ def find_rectangle_geometric(markers, image_shape, debug=False):
 
     if len(bottom_markers) < 2:
         if debug:
-            print(f"  Need at least 2 bottom markers, found {len(bottom_markers)}")
+            print(f"  ❌ Need at least 2 bottom markers, found {len(bottom_markers)}")
         return None
 
     # Sort bottom markers by X coordinate
@@ -267,7 +182,7 @@ def find_rectangle_geometric(markers, image_shape, debug=False):
 
     if not top_left_candidates or not top_right_candidates:
         if debug:
-            print(f"  Cannot find top markers aligned with bottom")
+            print(f"  ❌ Cannot find top markers aligned with bottom")
             print(f"     Top left candidates:  {len(top_left_candidates)}")
             print(f"     Top right candidates: {len(top_right_candidates)}")
         return None
@@ -286,12 +201,12 @@ def find_rectangle_geometric(markers, image_shape, debug=False):
 
     if rect_width < w * 0.1 or rect_height < h * 0.1:
         if debug:
-            print(f"  Rectangle too small: {rect_width}x{rect_height}")
+            print(f"  ❌ Rectangle too small: {rect_width}x{rect_height}")
         return None
 
     if rect_width > w * 0.9 or rect_height > h * 0.9:
         if debug:
-            print(f"  Rectangle too large: {rect_width}x{rect_height}")
+            print(f"  ❌ Rectangle too large: {rect_width}x{rect_height}")
         return None
 
     # Calculate bounding box from 4 corners
@@ -306,7 +221,7 @@ def find_rectangle_geometric(markers, image_shape, debug=False):
 
     if top_y_diff > h * 0.05 or bottom_y_diff > h * 0.05:
         if debug:
-            print(f"  Warning: Horizontal alignment off (top: {top_y_diff}px, bottom: {bottom_y_diff}px)")
+            print(f"  ⚠️  Warning: Horizontal alignment off (top: {top_y_diff}px, bottom: {bottom_y_diff}px)")
 
     return (x1, y1, x2, y2)
 
@@ -315,51 +230,46 @@ def find_rectangle_geometric(markers, image_shape, debug=False):
 # CALIBRATION
 # ============================================================================
 
-def calibrate_camera(rtsp_url, debug=False, show_gui=False):
+def calibrate_camera(rtsp_url, debug=False):
     """
     Calibrate loading area from camera stream.
-
-    Args:
-        rtsp_url: RTSP camera URL
-        debug: Save intermediate debug images
-        show_gui: Show preview in GUI window
 
     Returns:
         Tuple of (x1, y1, x2, y2) coordinates or None
     """
-    print("\nConnecting to camera...")
+    print("\n📷 Connecting to camera...")
     cap = cv2.VideoCapture(rtsp_url)
 
     if not cap.isOpened():
-        print(f"Error: Cannot connect to camera: {rtsp_url}")
+        print(f"❌ Error: Cannot connect to camera: {rtsp_url}")
         return None
 
-    print("Camera connected")
-    print("\nCapturing frame...")
+    print("✅ Camera connected")
+    print("\n📸 Capturing frame...")
 
     # Skip first few frames to let camera stabilize
     for _ in range(10):
         ret, frame = cap.read()
         if not ret:
-            print("Error: Cannot read frame")
+            print("❌ Error: Cannot read frame")
             cap.release()
             return None
 
     cap.release()
 
     h, w = frame.shape[:2]
-    print(f"Frame captured: {w}x{h}px")
+    print(f"✅ Frame captured: {w}x{h}px")
 
     if debug:
         cv2.imwrite('debug_0_original.jpg', frame)
 
     # Detect markers
-    print("\nDetecting X markers...")
+    print("\n🔍 Detecting X markers...")
     markers = detect_x_markers(frame, debug=debug)
 
     if len(markers) < 4:
-        print(f"Error: Found only {len(markers)} markers, need 4")
-        print("\nTroubleshooting:")
+        print(f"❌ Error: Found only {len(markers)} markers, need 4")
+        print("\n💡 Troubleshooting:")
         print("   1. Ensure 4 large X markers (5-8cm) at loading area corners")
         print("   2. Use black marker on light background")
         print("   3. Check lighting (no shadows on markers)")
@@ -368,14 +278,14 @@ def calibrate_camera(rtsp_url, debug=False, show_gui=False):
             print(f"   5. Check debug_3_markers.jpg to see what was detected")
         return None
 
-    print(f"Found {len(markers)} markers")
+    print(f"✅ Found {len(markers)} markers")
 
     # Find rectangle
-    print("\nCalculating loading area...")
+    print("\n🔧 Calculating loading area...")
     rectangle = find_rectangle_geometric(markers, frame.shape, debug=debug)
 
     if rectangle is None:
-        print("Error: Cannot determine loading area from markers")
+        print("❌ Error: Cannot determine loading area from markers")
         return None
 
     x1, y1, x2, y2 = rectangle
@@ -383,9 +293,9 @@ def calibrate_camera(rtsp_url, debug=False, show_gui=False):
     area_h = y2 - y1
     area_pct = (area_w * area_h) / (w * h) * 100
 
-    print(f"Loading area: {area_w}x{area_h}px ({area_pct:.1f}% of frame)")
+    print(f"✅ Loading area: {area_w}x{area_h}px ({area_pct:.1f}% of frame)")
 
-    # Create preview image
+    # Save preview
     preview = frame.copy()
     cv2.rectangle(preview, (x1, y1), (x2, y2), (0, 255, 0), 3)
 
@@ -393,31 +303,13 @@ def calibrate_camera(rtsp_url, debug=False, show_gui=False):
     for mx, my in markers:
         cv2.circle(preview, (mx, my), 8, (0, 0, 255), -1)
 
-    # Add text overlay with coordinates
-    text = f"Area: ({x1},{y1}) - ({x2},{y2}) | {area_w}x{area_h}px"
-    cv2.putText(preview, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
-                0.7, (0, 255, 0), 2)
-
-    # Save preview to file
     os.makedirs('test_images', exist_ok=True)
     preview_path = 'test_images/calibration_preview.jpg'
     cv2.imwrite(preview_path, preview)
-    print(f"Preview saved: {preview_path}")
+    print(f"✅ Preview saved: {preview_path}")
 
     if debug:
         cv2.imwrite('debug_4_final.jpg', preview)
-
-    # Show GUI preview if requested
-    if show_gui:
-        # Resize for display if too large
-        display_img = preview.copy()
-        max_display_h = 800
-        if display_img.shape[0] > max_display_h:
-            scale = max_display_h / display_img.shape[0]
-            new_w = int(display_img.shape[1] * scale)
-            display_img = cv2.resize(display_img, (new_w, max_display_h))
-
-        show_image("Calibration Preview", display_img)
 
     return rectangle
 
@@ -430,7 +322,7 @@ def save_calibration(rectangle):
     with open(config_file, 'w') as f:
         f.write(f"{rectangle[0]},{rectangle[1]},{rectangle[2]},{rectangle[3]}\n")
 
-    print(f"Configuration saved: {config_file}")
+    print(f"✅ Configuration saved: {config_file}")
 
 
 # ============================================================================
@@ -446,41 +338,28 @@ def main():
         action='store_true',
         help="Enable debug mode (save intermediate images)"
     )
-    parser.add_argument(
-        '--no-display',
-        action='store_true',
-        help="Never show preview window (use in headless mode)"
-    )
 
     args = parser.parse_args()
 
-    # Determine if we should show GUI
-    if args.no_display:
-        args.show_gui = False
-    else:
-        args.show_gui = can_show_gui()
-        if args.show_gui:
-            print("Graphical environment detected - will show preview")
-
     print("=" * 70)
-    print("   LOADING AREA CALIBRATION")
+    print("   📐 LOADING AREA CALIBRATION")
     print("=" * 70)
 
     # Get camera URL
     rtsp_url = RTSPConfig.get_url()
 
     # Calibrate
-    rectangle = calibrate_camera(rtsp_url, debug=args.debug, show_gui=args.show_gui)
+    rectangle = calibrate_camera(rtsp_url, debug=args.debug)
 
     if rectangle is None:
-        print("\nCalibration failed")
+        print("\n❌ Calibration failed")
         sys.exit(1)
 
     # Save
     save_calibration(rectangle)
 
     print("\n" + "=" * 70)
-    print("   CALIBRATION COMPLETE")
+    print("   ✅ CALIBRATION COMPLETE")
     print("=" * 70)
     print("\nNext steps:")
     print("  1. Verify preview: test_images/calibration_preview.jpg")
