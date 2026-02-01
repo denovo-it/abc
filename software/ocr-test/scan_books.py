@@ -34,6 +34,14 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional
 from difflib import SequenceMatcher
+from spellchecker import SpellChecker
+
+# Local book database for title validation
+try:
+    from setup_database import BookDatabase
+    BOOK_DB_AVAILABLE = True
+except ImportError:
+    BOOK_DB_AVAILABLE = False
 
 
 # ============================================================================
@@ -168,33 +176,27 @@ class OCRPostProcessor:
         '|': 'I', '!': 'I', '@': 'A', '©': 'C', '®': 'R',
     }
 
-    # Common word-level OCR errors (especially Italian)
-    WORD_CORRECTIONS = {
-        'OLMRQ': 'OLIMPO',
-        'OLMDQ': 'OLIMPO',
-        'OLMTQ': 'OLIMPO',
-        'OLMQ': 'OLIMPO',  # Yet another variant
-        'OL1MPO': 'OLIMPO',
-        'OLMPO': 'OLIMPO',
-        'EROL': 'EROI',
-        'EROA': 'EROI',
-        'EROX': 'EROI',  # New variant
-        'ER0I': 'EROI',
-        'GLMIQ': 'GLI',
-        'GL1': 'GLI',
-        'R10RDAN': 'RIORDAN',
-        'R1ORDAN': 'RIORDAN',
-        'MONDADOR1': 'MONDADORI',
-        'MONOADORI': 'MONDADORI',
-        'PENGU1N': 'PENGUIN',
-        'BLSTSELLERS': '',  # Remove series name (directly, not via BESTSELLERS)
-        'BESTSELLERS': '',  # Remove series name
-        # OSCAR not removed - needed for publisher imprint mapping (now filtered in parser)
-        'DELL': "DELL'",  # Often missing apostrophe
-    }
+    # OCR digit-to-letter mapping for cleaning
+    OCR_DIGIT_MAP = {'0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't', '8': 'b'}
+
+    # WORD_CORRECTIONS removed - using spell checking instead
+    WORD_CORRECTIONS = {}
 
     def __init__(self, debug=False):
         self.debug = debug
+        # Initialize spell checker for OCR correction
+        try:
+            self.spell = SpellChecker(language='en')
+            self.spell.word_frequency.load_words([
+                'harrow', 'riordan', 'tolkien', 'rowling', 'gaiman',
+                'sanderson', 'pratchett', 'erikson', 'hobb', 'weeks',
+                'alix', 'rick', 'neil', 'brandon', 'terry', 'steven',
+                'january', 'february', 'thousand', 'doors', 'beautiful',
+                'unbearably', 'olimpo', 'eroi', 'mondadori', 'penguin', 'harper'
+            ])
+        except Exception as e:
+            print(f"Warning: SpellChecker init failed: {e}")
+            self.spell = None
 
     def correct_text(self, text, text_type='title'):
         """Correct OCR errors in text"""
@@ -216,24 +218,89 @@ class OCRPostProcessor:
         return corrected
 
     def _correct_words(self, text):
-        """Apply word-level corrections for common OCR mistakes"""
-        corrected = text
-
-        # Replace whole words
-        words = corrected.split()
+        """Apply word-level corrections using spell checking"""
+        words = text.split()
         corrected_words = []
 
         for word in words:
             word_upper = word.upper()
-            # Check direct match
+
+            # Check word corrections dict first
             if word_upper in self.WORD_CORRECTIONS:
                 replacement = self.WORD_CORRECTIONS[word_upper]
-                if replacement:  # Only add if not empty string
+                if replacement:
                     corrected_words.append(replacement)
-            else:
-                corrected_words.append(word)
+                continue
+
+            # Try spell checking for words with OCR artifacts
+            if self.spell and len(word) >= 4:
+                corrected_word = self._spell_correct_ocr(word)
+                if corrected_word != word:
+                    corrected_words.append(corrected_word)
+                    continue
+
+            corrected_words.append(word)
 
         return ' '.join(corrected_words)
+
+    def _spell_correct_ocr(self, word):
+        """Use spell checking to fix OCR errors"""
+        if not self.spell:
+            return word
+
+        # Skip likely proper names (short capitalized words without digits)
+        if len(word) <= 5 and word[0].isupper() and word.isalpha():
+            if not any(c.isdigit() for c in word):
+                return word
+
+        # Clean OCR artifacts (digits that look like letters)
+        cleaned = word
+        was_cleaned = False
+        for digit, letter in self.OCR_DIGIT_MAP.items():
+            if digit in cleaned:
+                cleaned = cleaned.replace(digit, letter)
+                was_cleaned = True
+
+        # Check if cleaned word is mostly letters
+        alpha_ratio = sum(c.isalpha() for c in cleaned) / len(cleaned) if cleaned else 0
+        if alpha_ratio < 0.8:
+            return word
+
+        clean_lower = cleaned.lower()
+
+        # If cleaned and valid, use it
+        if was_cleaned and clean_lower in self.spell:
+            if word.isupper():
+                result = clean_lower.upper()
+            elif word[0].isupper():
+                result = clean_lower.capitalize()
+            else:
+                result = clean_lower
+            if self.debug:
+                print(f"    OCR clean: {word} -> {result}")
+            return result
+
+        # Try spell correction for unknown words
+        if clean_lower not in self.spell:
+            correction = self.spell.correction(clean_lower)
+            if correction and correction != clean_lower:
+                # Be conservative with short words
+                if len(word) <= 5:
+                    common = sum(a == b for a, b in zip(clean_lower, correction))
+                    if common < len(clean_lower) - 1:
+                        return word
+
+                if word.isupper():
+                    result = correction.upper()
+                elif word[0].isupper():
+                    result = correction.capitalize()
+                else:
+                    result = correction
+                if self.debug:
+                    print(f"    Spell: {word} -> {result}")
+                return result
+
+        return word
 
     def _correct_characters(self, text):
         """Apply character-level corrections"""
@@ -365,16 +432,36 @@ class BookCoverParser:
         r"(?i)(beautiful|brilliant|stunning|masterpiece|compelling)",
     ]
 
-    def __init__(self):
-        # Load authors database
+    def __init__(self, debug=False):
+        self.debug = debug
+
+        # Initialize book database first (used by other loaders)
+        self.book_db = None
+        if BOOK_DB_AVAILABLE:
+            try:
+                db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'books.db')
+                if os.path.exists(db_path):
+                    self.book_db = BookDatabase(db_path)
+                    if self.debug:
+                        stats = self.book_db.get_stats()
+                        print(f"Book DB: {stats['total_books']} books, {stats['total_authors']} authors, {stats['total_publishers']} publishers")
+            except Exception as e:
+                if self.debug:
+                    print(f"Book DB not available: {e}")
+
+        # Load from database (or fallback to txt files)
         self.known_authors = self._load_authors_database()
-        # Load publishers database
         self.known_publishers = self._load_publishers_database()
-        # Load publisher imprints mapping
         self.publisher_imprints = self._load_imprints_mapping()
 
+        if self.debug:
+            print(f"Loaded: {len(self.known_authors)} authors, {len(self.known_publishers)} publishers, {len(self.publisher_imprints)} imprints")
+
     def _load_authors_database(self):
-        """Load known authors from file"""
+        """Load known authors from database"""
+        if self.book_db:
+            return self.book_db.get_all_authors()
+        # Fallback to txt file if database not available
         authors = set()
         try:
             if os.path.exists('known_authors.txt'):
@@ -384,11 +471,14 @@ class BookCoverParser:
                         if line and not line.startswith('#'):
                             authors.add(line.upper())
         except Exception:
-            pass  # Continue without database if file missing
+            pass
         return authors
 
     def _load_publishers_database(self):
-        """Load known publishers from file"""
+        """Load known publishers from database"""
+        if self.book_db:
+            return self.book_db.get_all_publishers()
+        # Fallback to txt file if database not available
         publishers = set()
         try:
             if os.path.exists('known_publishers.txt'):
@@ -402,7 +492,10 @@ class BookCoverParser:
         return publishers
 
     def _load_imprints_mapping(self):
-        """Load imprint to publisher mapping"""
+        """Load imprint to publisher mapping from database"""
+        if self.book_db:
+            return self.book_db.get_all_imprints()
+        # Fallback to txt file if database not available
         mapping = {}
         try:
             if os.path.exists('publisher_imprints.txt'):
@@ -884,8 +977,8 @@ def run_ocr_easyocr(image_path):
         print("❌ EasyOCR not installed. Install with: pip install easyocr")
         sys.exit(1)
 
-    reader = easyocr.Reader(['en'], gpu=False)
-    results = reader.readtext(image_path)
+    reader = easyocr.Reader(['en', 'it'], gpu=False)
+    results = reader.readtext(image_path, low_text=0.3)
 
     text_boxes = []
     for (bbox, text, conf) in results:
@@ -969,6 +1062,7 @@ class ContinuousScanner:
 
         # Cleanup old temporary files
         self._cleanup_temp_files()
+        self._cleanup_on_startup()
 
         # Load calibration
         self.loading_area = self._load_loading_area()
@@ -990,14 +1084,77 @@ class ContinuousScanner:
             sys.exit(1)
 
     def _cleanup_temp_files(self):
-        """Remove old temporary and debug files"""
+        """Remove temporary files"""
         temp_files = [
             'temp_ocr_input.jpg',
             'test_images/debug_preprocessed_last.jpg'
         ]
         for f in temp_files:
             if os.path.exists(f):
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
+
+    def _cleanup_on_startup(self):
+        """
+        Clean up old files at application startup.
+        Removes:
+        - All temporary files
+        - Old book images (keeps last 10)
+        - Debug images
+        - Old log files
+        """
+        import glob
+
+        print("Pulizia file temporanei...")
+        cleaned = 0
+
+        # 1. Remove temp files
+        temp_patterns = [
+            'temp_*.jpg',
+            'debug_*.jpg',
+            '*.tmp',
+        ]
+        for pattern in temp_patterns:
+            for f in glob.glob(pattern):
+                try:
+                    os.remove(f)
+                    cleaned += 1
+                except Exception:
+                    pass
+
+        # 2. Clean old book images (keep last 10)
+        book_images = sorted(glob.glob('test_images/book_*.jpg'))
+        keep_last = 10
+        if len(book_images) > keep_last:
+            for f in book_images[:-keep_last]:
+                try:
+                    os.remove(f)
+                    cleaned += 1
+                except Exception:
+                    pass
+
+        # 3. Clean debug images in test_images
+        for f in glob.glob('test_images/debug_*.jpg'):
+            try:
                 os.remove(f)
+                cleaned += 1
+            except Exception:
+                pass
+
+        if cleaned > 0:
+            print(f"  Rimossi {cleaned} file")
+        else:
+            print("  Nessun file da rimuovere")
+
+    def _delete_last_capture(self, capture_path):
+        """Delete the last captured image after processing"""
+        if capture_path and os.path.exists(capture_path):
+            try:
+                os.remove(capture_path)
+            except Exception:
+                pass
 
     def _fuzzy_correct_with_databases(self, text):
         """
@@ -1031,7 +1188,7 @@ class ContinuousScanner:
             # First check fuzzy match with imprints (catch common OCR errors like OSEAR → OSCAR)
             for imprint in self.parser.publisher_imprints.keys():
                 ratio = SequenceMatcher(None, word_upper, imprint).ratio()
-                if ratio > 0.80:  # 80% threshold for imprints (OSEAR → OSCAR = 4/5 = 0.80)
+                if ratio >= 0.80:  # 80% threshold for imprints (OSEAR → OSCAR = 4/5 = 0.80)
                     best_ratio = ratio
                     best_match = imprint
 
@@ -1255,6 +1412,7 @@ class ContinuousScanner:
                 os.makedirs('test_images', exist_ok=True)
                 capture_path = f"test_images/book_{timestamp}.jpg"
                 cv2.imwrite(capture_path, cropped)
+                # Note: image will be deleted after OCR processing to save space
                 print(" ✅")
 
                 # OCR
@@ -1268,6 +1426,9 @@ class ContinuousScanner:
 
                 # Save to log
                 self._log_result(timestamp, book_info)
+
+                # Delete captured image to save space
+                self._delete_last_capture(capture_path)
 
                 # Auto mode delay
                 if self.auto_mode:
