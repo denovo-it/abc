@@ -346,8 +346,67 @@ class BookDatabase:
         return authors
 
     def is_known_author(self, name: str) -> bool:
-        """Check if author is known"""
-        return name.upper() in self.get_all_authors()
+        """Check if author is known (SQL query, no memory load)"""
+        if not name:
+            return False
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        name_norm = self.normalize(name)
+        cursor.execute('SELECT 1 FROM authors WHERE name_normalized = ? LIMIT 1', (name_norm,))
+        result = cursor.fetchone() is not None
+        conn.close()
+        return result
+
+    def search_author(self, name: str, limit: int = 5) -> List[str]:
+        """Search authors by name (SQL LIKE query)"""
+        if not name or len(name) < 2:
+            return []
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        name_norm = self.normalize(name)
+        cursor.execute(
+            'SELECT name FROM authors WHERE name_normalized LIKE ? ORDER BY book_count DESC LIMIT ?',
+            (f'%{name_norm}%', limit)
+        )
+        results = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def fuzzy_match_author_sql(self, name: str, threshold: float = 0.8) -> Optional[str]:
+        """
+        Fuzzy match author name using SQL (memory efficient).
+        Returns best match if above threshold, None otherwise.
+        """
+        if not name or len(name) < 3:
+            return None
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        name_upper = name.upper()
+
+        # First try exact match
+        cursor.execute('SELECT name FROM authors WHERE UPPER(name) = ? LIMIT 1', (name_upper,))
+        result = cursor.fetchone()
+        if result:
+            conn.close()
+            return result[0]
+
+        # Try prefix match (for OCR errors at end of word)
+        if len(name) >= 4:
+            prefix = name_upper[:len(name)-1]
+            cursor.execute(
+                'SELECT name FROM authors WHERE UPPER(name) LIKE ? ORDER BY book_count DESC LIMIT 10',
+                (f'{prefix}%',)
+            )
+            candidates = cursor.fetchall()
+            for (candidate,) in candidates:
+                ratio = SequenceMatcher(None, name_upper, candidate.upper()).ratio()
+                if ratio >= threshold:
+                    conn.close()
+                    return candidate
+
+        conn.close()
+        return None
 
     # =========================================================================
     # PUBLISHERS
@@ -402,8 +461,67 @@ class BookDatabase:
         return publishers
 
     def is_known_publisher(self, name: str) -> bool:
-        """Check if publisher is known"""
-        return name.upper() in self.get_all_publishers()
+        """Check if publisher is known (SQL query, no memory load)"""
+        if not name:
+            return False
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        name_norm = self.normalize(name)
+        cursor.execute('SELECT 1 FROM publishers WHERE name_normalized = ? LIMIT 1', (name_norm,))
+        result = cursor.fetchone() is not None
+        conn.close()
+        return result
+
+    def search_publisher(self, name: str, limit: int = 5) -> List[str]:
+        """Search publishers by name (SQL LIKE query)"""
+        if not name or len(name) < 2:
+            return []
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        name_norm = self.normalize(name)
+        cursor.execute(
+            'SELECT name FROM publishers WHERE name_normalized LIKE ? ORDER BY book_count DESC LIMIT ?',
+            (f'%{name_norm}%', limit)
+        )
+        results = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return results
+
+    def fuzzy_match_publisher_sql(self, name: str, threshold: float = 0.8) -> Optional[str]:
+        """
+        Fuzzy match publisher name using SQL (memory efficient).
+        Returns best match if above threshold, None otherwise.
+        """
+        if not name or len(name) < 3:
+            return None
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        name_upper = name.upper()
+
+        # First try exact match
+        cursor.execute('SELECT name FROM publishers WHERE UPPER(name) = ? LIMIT 1', (name_upper,))
+        result = cursor.fetchone()
+        if result:
+            conn.close()
+            return result[0]
+
+        # Try prefix match (for OCR errors at end of word)
+        if len(name) >= 4:
+            prefix = name_upper[:len(name)-1]
+            cursor.execute(
+                'SELECT name FROM publishers WHERE UPPER(name) LIKE ? ORDER BY book_count DESC LIMIT 10',
+                (f'{prefix}%',)
+            )
+            candidates = cursor.fetchall()
+            for (candidate,) in candidates:
+                ratio = SequenceMatcher(None, name_upper, candidate.upper()).ratio()
+                if ratio >= threshold:
+                    conn.close()
+                    return candidate
+
+        conn.close()
+        return None
 
     # =========================================================================
     # IMPRINTS

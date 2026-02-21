@@ -435,7 +435,7 @@ class BookCoverParser:
     def __init__(self, debug=False):
         self.debug = debug
 
-        # Initialize book database first (used by other loaders)
+        # Initialize book database (used for SQL queries, NOT loaded into memory)
         self.book_db = None
         if BOOK_DB_AVAILABLE:
             try:
@@ -443,53 +443,37 @@ class BookCoverParser:
                 if os.path.exists(db_path):
                     self.book_db = BookDatabase(db_path)
                     if self.debug:
-                        stats = self.book_db.get_stats()
-                        print(f"Book DB: {stats['total_books']} books, {stats['total_authors']} authors, {stats['total_publishers']} publishers")
+                        print(f"Book DB connected (SQL mode)")
             except Exception as e:
                 if self.debug:
                     print(f"Book DB not available: {e}")
 
-        # Load from database (or fallback to txt files)
-        self.known_authors = self._load_authors_database()
-        self.known_publishers = self._load_publishers_database()
+        # Only load imprints (small table, 22 records)
+        # Authors/publishers use SQL queries instead of loading into memory
+        self.known_authors = set()  # Empty - use SQL queries
+        self.known_publishers = set()  # Empty - use SQL queries
         self.publisher_imprints = self._load_imprints_mapping()
 
         if self.debug:
-            print(f"Loaded: {len(self.known_authors)} authors, {len(self.known_publishers)} publishers, {len(self.publisher_imprints)} imprints")
+            print(f"Loaded: {len(self.publisher_imprints)} imprints (authors/publishers via SQL)")
 
     def _load_authors_database(self):
-        """Load known authors from database"""
-        if self.book_db:
-            return self.book_db.get_all_authors()
-        # Fallback to txt file if database not available
-        authors = set()
-        try:
-            if os.path.exists('known_authors.txt'):
-                with open('known_authors.txt', 'r', encoding='utf-8') as f:
-                    for line in f:
-                        line = line.strip()
-                        if line and not line.startswith('#'):
-                            authors.add(line.upper())
-        except Exception:
-            pass
-        return authors
+        """
+        Load known authors - now returns empty set.
+        Authors are queried via SQL when needed (memory efficient).
+        """
+        # Do NOT load all authors into memory (17M+ records)
+        # Use self.book_db.is_known_author() or fuzzy_match_author_sql() instead
+        return set()
 
     def _load_publishers_database(self):
-        """Load known publishers from database"""
-        if self.book_db:
-            return self.book_db.get_all_publishers()
-        # Fallback to txt file if database not available
-        publishers = set()
-        try:
-            if os.path.exists('known_publishers.txt'):
-                with open('known_publishers.txt', 'r', encoding='utf-8') as f:
-                    for line in f:
-                        line = line.strip()
-                        if line and not line.startswith('#'):
-                            publishers.add(line.upper())
-        except Exception:
-            pass
-        return publishers
+        """
+        Load known publishers - now returns empty set.
+        Publishers are queried via SQL when needed (memory efficient).
+        """
+        # Do NOT load all publishers into memory (5M+ records)
+        # Use self.book_db.is_known_publisher() or fuzzy_match_publisher_sql() instead
+        return set()
 
     def _load_imprints_mapping(self):
         """Load imprint to publisher mapping from database"""
@@ -800,32 +784,28 @@ class BookCoverParser:
         return False
 
     def _matches_author_database(self, text: str) -> bool:
-        """Check if text matches known authors database"""
-        if not self.known_authors:
+        """Check if text matches known authors database (via SQL query)"""
+        if not self.book_db:
             return False
 
-        text_upper = text.upper()
+        text_clean = text.strip()
+        if not text_clean:
+            return False
 
-        # Exact match (full name or surname)
-        if text_upper in self.known_authors:
+        # Check exact match via SQL
+        if self.book_db.is_known_author(text_clean):
             return True
 
-        # Check if any word in text is a known surname
-        words = text_upper.split()
+        # Check if any word in text is a known author surname
+        words = text_clean.split()
         for word in words:
-            if len(word) > 2 and word in self.known_authors:
+            if len(word) > 2 and self.book_db.is_known_author(word):
                 return True
 
-        # Fuzzy match for common OCR errors
-        # Check if text is very similar to known author (edit distance ≤ 2)
-        for known in self.known_authors:
-            if len(known) < 4:  # Skip short entries for fuzzy
-                continue
-            if abs(len(text_upper) - len(known)) > 2:
-                continue
-            # Simple similarity check
-            if self._similarity(text_upper, known) > 0.85:
-                return True
+        # Fuzzy match via SQL
+        match = self.book_db.fuzzy_match_author_sql(text_clean, threshold=0.85)
+        if match:
+            return True
 
         return False
 
@@ -936,21 +916,16 @@ class BookCoverParser:
         return False
 
     def _is_likely_publisher(self, text: str, position_y_ratio: float) -> bool:
-        """Check if text is likely a publisher"""
+        """Check if text is likely a publisher (via SQL query)"""
         text_upper = text.strip().upper()
 
-        # Check database first (strongest signal)
-        if text_upper in self.known_publishers:
-            return True
-
-        # Check imprints mapping (e.g., "OSCAR" -> "MONDADORI")
+        # Check imprints mapping first (small in-memory table)
         if text_upper in self.publisher_imprints:
             return True
 
-        # Check for partial matches in database
-        for known_pub in self.known_publishers:
-            if known_pub in text_upper or text_upper in known_pub:
-                return True
+        # Check database via SQL query
+        if self.book_db and self.book_db.is_known_publisher(text_upper):
+            return True
 
         # Original pattern matching
         for pattern in self.PUBLISHER_PATTERNS:
@@ -1158,10 +1133,8 @@ class ContinuousScanner:
 
     def _fuzzy_correct_with_databases(self, text):
         """
-        Apply fuzzy matching with databases to automatically correct OCR errors
-
-        Instead of manually maintaining WORD_CORRECTIONS for every variant (OLMRQ, OLMDQ, OLMTQ, etc.),
-        this uses fuzzy matching to find similar words in author/publisher databases.
+        Apply fuzzy matching with databases to automatically correct OCR errors.
+        Uses SQL queries instead of loading all records into memory.
 
         Example: "RIORD4N" → fuzzy match → "RIORDAN" (from database)
         """
@@ -1177,45 +1150,35 @@ class ContinuousScanner:
 
             word_upper = word.upper()
 
-            # Skip if word is a known imprint (exact match - will be handled by parser)
+            # Skip if word is a known imprint (exact match)
             if word_upper in self.parser.publisher_imprints:
                 corrected_words.append(word)
                 continue
 
             best_match = None
-            best_ratio = 0.80  # Minimum similarity threshold
 
-            # First check fuzzy match with imprints (catch common OCR errors like OSEAR → OSCAR)
+            # Check fuzzy match with imprints (small in-memory table)
             for imprint in self.parser.publisher_imprints.keys():
                 ratio = SequenceMatcher(None, word_upper, imprint).ratio()
-                if ratio >= 0.80:  # 80% threshold for imprints (OSEAR → OSCAR = 4/5 = 0.80)
-                    best_ratio = ratio
+                if ratio >= 0.80:
                     best_match = imprint
+                    break
 
-            # Check against known authors
-            for author in self.parser.known_authors:
-                ratio = SequenceMatcher(None, word_upper, author).ratio()
-                if ratio > best_ratio:
-                    best_ratio = ratio
-                    best_match = author
-
-            # Check against known publishers
-            for publisher in self.parser.known_publishers:
-                ratio = SequenceMatcher(None, word_upper, publisher).ratio()
-                if ratio > best_ratio:
-                    best_ratio = ratio
-                    best_match = publisher
-
-            # Check against publisher imprints
-            for imprint in self.parser.publisher_imprints.keys():
-                ratio = SequenceMatcher(None, word_upper, imprint).ratio()
-                if ratio > best_ratio:
-                    best_ratio = ratio
-                    best_match = imprint
+            # Try SQL fuzzy match for authors/publishers if no imprint match
+            if not best_match and self.parser.book_db:
+                # Try author match
+                match = self.parser.book_db.fuzzy_match_author_sql(word, threshold=0.80)
+                if match:
+                    best_match = match.upper()
+                else:
+                    # Try publisher match
+                    match = self.parser.book_db.fuzzy_match_publisher_sql(word, threshold=0.80)
+                    if match:
+                        best_match = match.upper()
 
             # Use best match if found, otherwise keep original
             if best_match:
-                corrected_words.append(best_match.title())  # Title case for readability
+                corrected_words.append(best_match.title())
             else:
                 corrected_words.append(word)
 

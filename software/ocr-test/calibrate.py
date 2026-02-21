@@ -47,7 +47,7 @@ def can_show_gui():
     if not has_display():
         return False
     # Check for image viewers
-    for viewer in ['feh', 'eog', 'gpicview', 'xdg-open']:
+    for viewer in ['feh', 'eog', 'gpicview', 'viewnior', 'xdg-open']:
         try:
             result = subprocess.run(['which', viewer], capture_output=True)
             if result.returncode == 0:
@@ -70,14 +70,15 @@ def show_image(title, image, wait_key=True):
         cv2.imwrite(temp_path, image)
 
         # Try to open with available viewer
-        viewers = ['feh', 'eog', 'gpicview', 'xdg-open']
+        viewers = ['feh', 'eog', 'gpicview', 'viewnior', 'xdg-open']
         opened = False
 
+        proc = None
         for viewer in viewers:
             try:
                 result = subprocess.run(['which', viewer], capture_output=True)
                 if result.returncode == 0:
-                    subprocess.Popen(
+                    proc = subprocess.Popen(
                         [viewer, temp_path],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL
@@ -90,7 +91,13 @@ def show_image(title, image, wait_key=True):
         if opened and wait_key:
             print("")
             print("Preview opened in external viewer.")
-            input("Press ENTER here to continue...")
+            input("Press ENTER to close preview and continue...")
+            # Kill the viewer process
+            try:
+                proc.terminate()
+                proc.wait(timeout=3)
+            except Exception:
+                pass
 
         return opened
     except Exception as e:
