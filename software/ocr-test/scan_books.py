@@ -1486,49 +1486,114 @@ def _run_metis_det_and_rec(image_path):
         return None
 
 
+def _bbox_iou(a, b):
+    """Compute intersection-over-union between two bboxes (x1,y1,x2,y2)"""
+    x1 = max(a[0], b[0])
+    y1 = max(a[1], b[1])
+    x2 = min(a[2], b[2])
+    y2 = min(a[3], b[3])
+    inter = max(0, x2 - x1) * max(0, y2 - y1)
+    if inter == 0:
+        return 0.0
+    area_a = (a[2] - a[0]) * (a[3] - a[1])
+    area_b = (b[2] - b[0]) * (b[3] - b[1])
+    return inter / (area_a + area_b - inter) if (area_a + area_b - inter) > 0 else 0.0
+
+
+def _text_quality_score(text):
+    """Score text quality: real words score higher than garbled text.
+    Returns a 0-1 score based on ratio of alphabetic chars and word length."""
+    if not text or not text.strip():
+        return 0.0
+    words = text.strip().split()
+    if not words:
+        return 0.0
+    # Ratio of alphabetic characters (penalizes random symbols)
+    alpha_ratio = sum(1 for c in text if c.isalpha()) / max(len(text), 1)
+    # Average word length (very short fragments = lower quality)
+    avg_word_len = sum(len(w) for w in words) / len(words)
+    word_len_score = min(avg_word_len / 4.0, 1.0)  # 4+ chars avg = full score
+    # Longer text is generally better (more complete reading)
+    length_score = min(len(text) / 10.0, 1.0)
+    return alpha_ratio * 0.4 + word_len_score * 0.3 + length_score * 0.3
+
+
+def _pick_best_box(candidates):
+    """Pick the best box from overlapping candidates.
+    Uses a combined score: text quality (60%) + OCR confidence (40%).
+    This prevents high-confidence garbled text from winning over
+    lower-confidence but correct readings."""
+    if len(candidates) == 1:
+        return candidates[0]
+    best = max(candidates, key=lambda b: (
+        _text_quality_score(b.text) * 0.6 + b.confidence * 0.4
+    ))
+    return best
+
+
 def _merge_ensemble_results(*box_lists):
-    """Merge multiple OCR results, picking highest confidence per text line"""
+    """Merge multiple OCR results with spatial overlap + text quality correlation.
+
+    For overlapping detections (IoU > 0.3), picks the reading with best
+    combined score (text quality + confidence) rather than confidence alone.
+    This ensures correct readings like 'IL FIGLIO DI NETTUNO' win over
+    garbled high-confidence variants."""
     # Flatten all non-empty lists
     all_boxes = []
     for blist in box_lists:
         if blist:
-            for b in blist:
-                all_boxes.append(('src', b))
+            all_boxes.extend(blist)
 
     if not all_boxes:
         return []
     if len(all_boxes) == 1:
-        return [all_boxes[0][1]]
+        return all_boxes
 
-    # Sort by y-center position
-    all_boxes.sort(key=lambda x: (x[1].bbox[1] + x[1].bbox[3]) / 2)
+    # Group overlapping boxes using spatial IoU
+    # Mark each box as not yet assigned to a cluster
+    n = len(all_boxes)
+    assigned = [False] * n
+    clusters = []
 
-    # Group by text line (similar y-center)
-    lines = []
-    current_line = [all_boxes[0]]
+    for i in range(n):
+        if assigned[i]:
+            continue
+        cluster = [all_boxes[i]]
+        assigned[i] = True
+        for j in range(i + 1, n):
+            if assigned[j]:
+                continue
+            # Check spatial overlap with any box in the cluster
+            for cb in cluster:
+                iou = _bbox_iou(cb.bbox, all_boxes[j].bbox)
+                if iou > 0.3:
+                    cluster.append(all_boxes[j])
+                    assigned[j] = True
+                    break
+                # Also check y-center proximity (same line, similar x range)
+                cy_a = (cb.bbox[1] + cb.bbox[3]) / 2
+                cy_b = (all_boxes[j].bbox[1] + all_boxes[j].bbox[3]) / 2
+                h_a = cb.bbox[3] - cb.bbox[1]
+                if abs(cy_a - cy_b) < max(h_a * 0.5, 15):
+                    # Same line - check x overlap
+                    x_overlap = (min(cb.bbox[2], all_boxes[j].bbox[2]) -
+                                 max(cb.bbox[0], all_boxes[j].bbox[0]))
+                    w_min = min(cb.bbox[2] - cb.bbox[0],
+                                all_boxes[j].bbox[2] - all_boxes[j].bbox[0])
+                    if w_min > 0 and x_overlap / w_min > 0.3:
+                        cluster.append(all_boxes[j])
+                        assigned[j] = True
+                        break
+        clusters.append(cluster)
 
-    for item in all_boxes[1:]:
-        _, box = item
-        _, prev_box = current_line[-1]
-
-        prev_cy = (prev_box.bbox[1] + prev_box.bbox[3]) / 2
-        curr_cy = (box.bbox[1] + box.bbox[3]) / 2
-        prev_h = prev_box.bbox[3] - prev_box.bbox[1]
-
-        # Same line if y-centers within 50% of height
-        if abs(curr_cy - prev_cy) < max(prev_h * 0.5, 15):
-            current_line.append(item)
-        else:
-            lines.append(current_line)
-            current_line = [item]
-    lines.append(current_line)
-
-    # For each line, pick best result
+    # For each cluster, pick the best reading
     result = []
-    for line in lines:
-        # Pick highest confidence
-        best = max(line, key=lambda x: x[1].confidence)
-        result.append(best[1])
+    for cluster in clusters:
+        best = _pick_best_box(cluster)
+        result.append(best)
+
+    # Sort by y-center for consistent output order
+    result.sort(key=lambda b: (b.bbox[1] + b.bbox[3]) / 2)
 
     return result
 
@@ -1910,15 +1975,15 @@ class ContinuousScanner:
         Multi-pass OCR: different preprocessings capture different text types.
         Pass 1: Upscale 2x + light denoise → small text (publisher, subtitle)
         Pass 2: Raw original image → large artistic text (title)
-        Passes 3-10: Color filter passes (disable with --no-color-filters) → text hidden by artistic colors
-        Merge by picking highest confidence per text line.
+        Passes 3-10: Color filters on original (disable with --no-color-filters)
+        Merge by spatial overlap + text quality correlation.
         """
         all_pass_boxes = []
         temp_files = []
         scale = 2.0
         total_passes = 2 + (8 if self.color_filters else 0)
 
-        # Pass 1: Upscale + denoise
+        # Pass 1: Upscale 2x + denoise
         print(f"   └─ Pass 1/{total_passes}: Upscale {scale:.0f}x + denoise + OCR...", end='', flush=True)
         upscaled = self.preprocessor.preprocess_for_ppocr_upscale(image, scale)
         temp_up = '/tmp/ocr_pass_upscale.jpg'
@@ -1945,7 +2010,7 @@ class ContinuousScanner:
         all_pass_boxes.append(boxes_raw)
         print(f" done ({len(boxes_raw)} blocks)")
 
-        # Color filter passes (optional)
+        # Color filter passes on original image (optional)
         if self.color_filters:
             filters = self.preprocessor.generate_color_filters(image)
             for i, (label, filtered) in enumerate(filters, start=3):

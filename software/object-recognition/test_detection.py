@@ -1,5 +1,8 @@
 #!/usr/bin/env python
-"""Unit tests for object detection (person + book) via Axelera Metis NPU.
+"""Object detection (person + book) via Axelera Metis NPU.
+
+Detects person and book objects from RTSP camera using YOLOv8 on Metis NPU.
+Prints detections with confidence % and bounding box to console.
 
 Requires:
   - Local venv activated (source venv/bin/activate)
@@ -9,21 +12,19 @@ Requires:
 Usage:
   cd software/object-recognition
   source venv/bin/activate
-  python -m pytest test_detection.py -v -s
-  # or:
-  python test_detection.py
+  python test_detection.py              # Run 30 frames
+  python test_detection.py --frames 60  # Run 60 frames
 """
 
+import argparse
 import os
 import sys
 import time
-import unittest
 
 # ---------------------------------------------------------------------------
 # Environment bootstrap
 # ---------------------------------------------------------------------------
 
-# Load RTSP credentials from local .env
 _ENV_PATH = os.path.join(os.path.dirname(__file__), '.env')
 
 
@@ -41,25 +42,21 @@ def _load_env(path):
 
 _load_env(_ENV_PATH)
 
-# Verify Voyager SDK environment is active
 if not os.environ.get('AXELERA_FRAMEWORK'):
     sys.exit(
         "ERROR: Voyager SDK environment not active.\n"
-        "Run:  source ../voyager-sdk/venv/bin/activate"
+        "Run:  source venv/bin/activate"
     )
 
-from axelera.app import config  # noqa: E402
-from axelera.app.stream import create_inference_stream  # noqa: E402
+from axelera.app import config, create_inference_stream  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-# COCO class IDs we care about
 PERSON_CLASS_ID = 0
 BOOK_CLASS_ID = 73
 
-# COCO label names (index == class_id)
 COCO_LABELS = (
     'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train',
     'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign',
@@ -78,10 +75,6 @@ COCO_LABELS = (
 
 TARGET_CLASSES = {PERSON_CLASS_ID, BOOK_CLASS_ID}
 
-# How many frames to analyse per test
-FRAMES_TO_PROCESS = 30
-
-# Pre-compiled model (Metis)
 MODEL_NAME = 'yolov8l-coco-onnx'
 
 
@@ -96,145 +89,121 @@ def _rtsp_url():
 
 
 # ---------------------------------------------------------------------------
-# Test class
+# Detection loop
 # ---------------------------------------------------------------------------
 
-class TestObjectDetection(unittest.TestCase):
-    """Integration tests: detect person/book from RTSP via Metis NPU."""
+def run_detection(n_frames):
+    """Run object detection for n_frames and print results."""
+    url = _rtsp_url()
+    url_safe = f"{url.split('@')[0].split('//')[0]}//<credentials>@{url.split('@')[1]}"
 
-    stream = None
+    print(f"\n{'='*60}")
+    print(f"  Model : {MODEL_NAME} (Metis NPU)")
+    print(f"  Source: {url_safe}")
+    print(f"  Target: person (id {PERSON_CLASS_ID}), book (id {BOOK_CLASS_ID})")
+    print(f"  Frames: {n_frames}")
+    print(f"{'='*60}\n")
 
-    @classmethod
-    def setUpClass(cls):
-        """Create the Metis inference stream once for all tests."""
-        url = _rtsp_url()
-        print(f"\n{'='*70}")
-        print(f"  Model : {MODEL_NAME} (Metis NPU)")
-        print(f"  Source: {url.split('@')[0].split('//')[0]}//<credentials>@{url.split('@')[1]}")
-        print(f"  Target: person (id {PERSON_CLASS_ID}), book (id {BOOK_CLASS_ID})")
-        print(f"{'='*70}\n")
+    # Create stream using the same API as inference.py
+    pipeline_config = config.PipelineConfig(
+        network=MODEL_NAME,
+        sources=[url],
+        pipe_type='gst',
+    )
 
-        cls.stream = create_inference_stream(
-            network=MODEL_NAME,
-            sources=[url],
-            pipe_type='gst',           # runs on Metis NPU
-            specified_frame_rate=-1,   # downstream-leaky: drop if slow
-        )
+    stream_config = config.InferenceStreamConfig(
+        timeout=10,
+        frames=n_frames,
+    )
 
-    @classmethod
-    def tearDownClass(cls):
-        """Shut down the inference stream."""
-        if cls.stream is not None:
-            cls.stream.stop()
-            print("\nStream stopped.")
+    stream = create_inference_stream(
+        stream_config=stream_config,
+        pipeline_configs=pipeline_config,
+    )
 
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
+    detections = []
+    processed = 0
+    t_start = time.time()
 
-    def _collect_detections(self, n_frames):
-        """Run inference for *n_frames* and return all target-class detections.
+    for frame_result in stream:
+        if frame_result.image is None and frame_result.meta is None:
+            continue
 
-        Returns:
-            list of dicts with keys: frame, class_id, label, score, bbox
-        """
-        results = []
-        processed = 0
+        processed += 1
 
-        for frame_result in self.stream:
-            if frame_result.meta is None:
+        # Access detections via task name from YAML pipeline
+        frame_dets = []
+        for det in frame_result.detections:
+            cid = int(det.class_id)
+            if cid not in TARGET_CLASSES:
                 continue
+            score = float(det.score)
+            bbox = det.box.tolist()
+            label = COCO_LABELS[cid] if cid < len(COCO_LABELS) else str(cid)
+            frame_dets.append({
+                'frame': processed,
+                'class_id': cid,
+                'label': label,
+                'score': score,
+                'bbox': bbox,
+            })
 
-            processed += 1
-            try:
-                det_meta = frame_result.meta['detections']
-            except (KeyError, TypeError):
-                continue
+        if frame_dets:
+            print(f"  --- Frame {processed}/{n_frames} ---")
+            for d in frame_dets:
+                x1, y1, x2, y2 = d['bbox']
+                w, h = x2 - x1, y2 - y1
+                print(f"    {d['label']:>8s}  {d['score']*100:5.1f}%  "
+                      f"  box=({x1:.0f},{y1:.0f}) {w:.0f}x{h:.0f}")
+            detections.extend(frame_dets)
 
-            for i in range(len(det_meta)):
-                cid = int(det_meta.class_ids[i])
-                if cid not in TARGET_CLASSES:
-                    continue
-                score = float(det_meta.scores[i])
-                bbox = det_meta.boxes[i].tolist()
-                label = COCO_LABELS[cid] if cid < len(COCO_LABELS) else str(cid)
-                results.append({
-                    'frame': processed,
-                    'class_id': cid,
-                    'label': label,
-                    'score': score,
-                    'bbox': bbox,
-                })
+        if processed >= n_frames:
+            break
 
-            if processed >= n_frames:
-                break
+    elapsed = time.time() - t_start
 
-        return results, processed
+    # Summary
+    persons = [d for d in detections if d['class_id'] == PERSON_CLASS_ID]
+    books = [d for d in detections if d['class_id'] == BOOK_CLASS_ID]
 
-    # ------------------------------------------------------------------
-    # Tests
-    # ------------------------------------------------------------------
+    print(f"\n{'='*60}")
+    print(f"  SUMMARY: {processed} frames in {elapsed:.1f}s ({processed/max(elapsed,0.1):.1f} fps)")
+    if persons:
+        avg_p = sum(d['score'] for d in persons) / len(persons)
+        max_p = max(d['score'] for d in persons)
+        print(f"    person : {len(persons):3d} detections, "
+              f"avg {avg_p*100:.1f}%, max {max_p*100:.1f}%")
+    else:
+        print(f"    person :   0 detections")
+    if books:
+        avg_b = sum(d['score'] for d in books) / len(books)
+        max_b = max(d['score'] for d in books)
+        print(f"    book   : {len(books):3d} detections, "
+              f"avg {avg_b*100:.1f}%, max {max_b*100:.1f}%")
+    else:
+        print(f"    book   :   0 detections")
+    print(f"{'='*60}\n")
 
-    def test_stream_produces_frames(self):
-        """The Metis pipeline should produce at least one frame."""
-        count = 0
-        for frame_result in self.stream:
-            if frame_result.meta is not None:
-                count += 1
-            if count >= 3:
-                break
-        self.assertGreater(count, 0, "No frames received from Metis pipeline")
-        print(f"  [OK] Stream alive - received {count} frames")
-
-    def test_detect_person_and_book(self):
-        """Run detection on RTSP stream, print person/book with confidence."""
-        detections, total_frames = self._collect_detections(FRAMES_TO_PROCESS)
-
-        print(f"\n  Processed {total_frames} frames, "
-              f"found {len(detections)} target detections\n")
-
-        # Summary per class
-        persons = [d for d in detections if d['class_id'] == PERSON_CLASS_ID]
-        books = [d for d in detections if d['class_id'] == BOOK_CLASS_ID]
-
-        # Print all detections frame by frame
-        current_frame = None
-        for d in detections:
-            if d['frame'] != current_frame:
-                current_frame = d['frame']
-                print(f"  --- Frame {current_frame}/{total_frames} ---")
-            x1, y1, x2, y2 = d['bbox']
-            w, h = x2 - x1, y2 - y1
-            print(f"    {d['label']:>8s}  {d['score']*100:5.1f}%  "
-                  f"  box=({x1:.0f},{y1:.0f}) {w:.0f}x{h:.0f}")
-
-        # Summary
-        print(f"\n  {'='*50}")
-        print(f"  SUMMARY over {total_frames} frames:")
-        if persons:
-            avg_p = sum(d['score'] for d in persons) / len(persons)
-            max_p = max(d['score'] for d in persons)
-            print(f"    person : {len(persons):3d} detections, "
-                  f"avg {avg_p*100:.1f}%, max {max_p*100:.1f}%")
-        else:
-            print(f"    person :   0 detections")
-        if books:
-            avg_b = sum(d['score'] for d in books) / len(books)
-            max_b = max(d['score'] for d in books)
-            print(f"    book   : {len(books):3d} detections, "
-                  f"avg {avg_b*100:.1f}%, max {max_b*100:.1f}%")
-        else:
-            print(f"    book   :   0 detections")
-        print(f"  {'='*50}\n")
-
-        # The test passes regardless - it's a live camera, objects may or may not
-        # be present. The key assertion is that inference ran successfully.
-        self.assertGreater(total_frames, 0, "No frames processed")
+    stream.stop()
+    return detections, processed
 
 
 # ---------------------------------------------------------------------------
-# CLI entry point
+# CLI
 # ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Detect person and book from RTSP camera via Metis NPU"
+    )
+    parser.add_argument(
+        '--frames', type=int, default=30,
+        help="Number of frames to process (default: 30)"
+    )
+    args = parser.parse_args()
+
+    run_detection(args.frames)
+
 
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    main()
