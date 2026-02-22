@@ -728,7 +728,7 @@ class BookDatabase:
     # =========================================================================
 
     def identify_book(self, title: str, author: str, publisher: str,
-                      raw_words: List[str]) -> dict:
+                      raw_words: List[str], language: str = None) -> dict:
         """
         Identify a book from OCR data using progressive refinement.
 
@@ -837,6 +837,10 @@ class BookDatabase:
                 if publisher_norm in self.normalize(r[5] or '')
             ]
             # If we have publisher-filtered results, give them priority later in scoring
+
+        # --- Language filter (if specified) ---
+        if language:
+            candidates = {r for r in candidates if r[8] == language}
 
         if not candidates:
             return result

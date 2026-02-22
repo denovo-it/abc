@@ -1414,11 +1414,12 @@ def run_ocr_ppocr_metis(image_path):
 class ContinuousScanner:
     """Continuous book OCR scanner"""
 
-    def __init__(self, model='hybrid', auto_mode=False, preprocessing=True, debug=False):
+    def __init__(self, model='hybrid', auto_mode=False, preprocessing=True, debug=False, lang=None):
         self.model = model
         self.auto_mode = auto_mode
         self.preprocessing = preprocessing
         self.debug = debug
+        self.lang = lang
         self.book_count = 0
         self.session_start = datetime.now()
 
@@ -1684,7 +1685,8 @@ class ContinuousScanner:
                 if len(word_clean) >= 3 and word_clean not in exclude_words:
                     raw_words.append(word_clean)
 
-        return self.parser.book_db.identify_book(title, author, publisher, raw_words)
+        return self.parser.book_db.identify_book(title, author, publisher, raw_words,
+                                                language=self.lang)
 
     def _load_loading_area(self):
         """Load loading area coordinates"""
@@ -1940,6 +1942,8 @@ class ContinuousScanner:
         print("="*70)
         print(f"Model:         {self.model}")
         print(f"Preprocessing: {'Enabled' if self.preprocessing else 'Disabled'}")
+        lang_display = {'en': 'English', 'it': 'Italian'}.get(self.lang, 'All')
+        print(f"DB language:   {lang_display}")
         print(f"Debug mode:    {'Enabled' if self.debug else 'Disabled'}")
         print(f"Auto mode:     {'Yes' if self.auto_mode else 'No (manual)'}")
         print(f"Loading area:  {self.loading_area[2]-self.loading_area[0]}x{self.loading_area[3]-self.loading_area[1]}px")
@@ -2082,6 +2086,12 @@ Examples:
         help="Disable preprocessing"
     )
     parser.add_argument(
+        '--lang',
+        choices=['en', 'it'],
+        default=None,
+        help="Filter DB search by language (default: all languages)"
+    )
+    parser.add_argument(
         '--debug',
         action='store_true',
         help="Enable debug mode (save intermediate images)"
@@ -2093,7 +2103,8 @@ Examples:
         model=args.model,
         auto_mode=args.auto,
         preprocessing=not args.no_preprocessing,
-        debug=args.debug
+        debug=args.debug,
+        lang=args.lang
     )
 
     scanner.run()
