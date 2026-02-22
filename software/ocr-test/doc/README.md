@@ -24,6 +24,62 @@ Disable with `--no-preprocessing` for single-pass mode.
 
 ---
 
+## Hardware Usage by OCR Mode
+
+### CPU Mode (`--model cpu`)
+
+PP-OCR v3 Latin, full pipeline on CPU.
+
+```
+CPU:     19-48% (all 8 cores active)
+Metis:   0% - IDLE
+RAM:     ~1.2 GB
+Speed:   ~6s/book (with multi-pass)
+```
+
+### Metis Mode (`--model metis`)
+
+Metis accelerated text detection + CPU text recognition.
+
+```
+CPU:     10-25% (recognition only)
+Metis:   ACTIVE (text detection)
+RAM:     ~1.2 GB
+Speed:   ~4s/book (with multi-pass)
+```
+
+The compiled PP-OCR detection model (`ppocr_det.axnet`) runs on the Metis
+accelerator. Input is preprocessed to quantized int8 NHWC format, output
+heatmap is dequantized and postprocessed on CPU. Text regions are then
+cropped and sent to PaddleOCR CPU recognition.
+
+### Hybrid Mode (`--model hybrid`) - DEFAULT
+
+Runs both CPU and Metis detection in parallel, merges best results per line.
+
+```
+CPU:     25-50% (full PP-OCR + recognition)
+Metis:   ACTIVE (text detection)
+RAM:     ~1.2 GB
+Speed:   ~8s/book (with multi-pass)
+```
+
+For each text line detected, the result with the highest confidence is selected
+from either the CPU or Metis pipeline. This provides the best overall accuracy
+at the cost of slightly more processing time.
+
+### Performance Summary
+
+| Mode | Speed | CPU | Metis | Best for |
+|------|-------|-----|-------|----------|
+| cpu | ~6s/book | 48% | idle | No accelerator available |
+| metis | ~4s/book | 25% | active | Speed priority |
+| hybrid | ~8s/book | 50% | active | Maximum accuracy (default) |
+
+All times include multi-pass OCR. With `--no-preprocessing`: roughly half.
+
+---
+
 ## Database Identification
 
 After OCR, the system searches a local SQLite database (18GB, 55M+ books) to
