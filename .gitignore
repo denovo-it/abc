@@ -11,4 +11,5 @@ software/ocr-test/test_images/*.jpg
 software/ocr-test/test_images/*.png
 !software/ocr-test/test_images/.gitkeep
 software/ocr-test/debug_*.jpg
+software/ocr-test/ocr_results.csv
 
