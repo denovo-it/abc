@@ -11,8 +11,8 @@ Usage:
 
 OCR Models:
     - tesseract: Fast, good for clean images (~8s/book)
-    - ppocr: Very fast, handles rotations (~3-5s/book)
-    - easyocr: Most accurate, slow (~15-18s/book) [DEFAULT]
+    - ppocr: Very fast, Latin/Italian support (~2.5s/book) [DEFAULT]
+    - ppocr-metis: Ensemble CPU+Metis accelerator (~3.5s/book, best quality)
 
 Database-Enhanced Parsing:
     - 18,500+ known authors for accurate detection
@@ -131,36 +131,24 @@ class BookCoverPreprocessor:
         return cleaned
 
     def preprocess_for_ppocr(self, image):
-        """Preprocess for PP-OCR (handles color, needs less aggressive processing)"""
-        # Convert to grayscale
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+        """Preprocess for PP-OCR (keeps color - PP-OCR expects RGB input)"""
+        # Light color denoising
+        denoised = cv2.fastNlMeansDenoisingColored(image, h=5, hColor=5)
 
-        # Light denoising
-        denoised = cv2.fastNlMeansDenoising(gray, h=10)
-
-        # CLAHE
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(denoised)
-
-        # Sharpen
-        kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
-        sharpened = cv2.filter2D(enhanced, -1, kernel)
-
-        return sharpened
-
-    def preprocess_for_easyocr(self, image):
-        """Preprocess for EasyOCR (deep learning, needs minimal preprocessing)"""
-        # EasyOCR works better with color images and minimal preprocessing
-        # Keep original color, apply only light enhancement
-
-        # Very light denoising on color image
-        denoised = cv2.fastNlMeansDenoisingColored(image, h=3, hColor=3)
-
-        # Optional: slight sharpening (very conservative)
+        # Conservative sharpening
         kernel = np.array([[0, -0.5, 0], [-0.5, 3, -0.5], [0, -0.5, 0]])
         sharpened = cv2.filter2D(denoised, -1, kernel)
 
         return sharpened
+
+    def preprocess_for_ppocr_upscale(self, image, scale=2.0):
+        """Upscale + light denoise for PP-OCR - captures small text better"""
+        h, w = image.shape[:2]
+        upscaled = cv2.resize(image, (int(w * scale), int(h * scale)),
+                              interpolation=cv2.INTER_CUBIC)
+        denoised = cv2.fastNlMeansDenoisingColored(upscaled, h=3, hColor=3)
+        return denoised
+
 
 
 # ============================================================================
@@ -453,6 +441,8 @@ class BookCoverParser:
         self.known_authors = set()  # Empty - use SQL queries
         self.known_publishers = set()  # Empty - use SQL queries
         self.publisher_imprints = self._load_imprints_mapping()
+        self._author_cache = {}  # Cache for _matches_author_database results
+        self._publisher_cache = {}  # Cache for is_known_publisher results
 
         if self.debug:
             print(f"Loaded: {len(self.publisher_imprints)} imprints (authors/publishers via SQL)")
@@ -493,15 +483,72 @@ class BookCoverParser:
             pass
         return mapping
 
+    def _detect_imprint_pre_merge(self, text_boxes: List[TextBox], image_height: int) -> Tuple[Optional[str], List[TextBox]]:
+        """
+        Detect imprint/publisher in raw text boxes BEFORE merging.
+        This prevents imprints from being merged with title/author text.
+        Returns (imprint_text, remaining_boxes) or (None, original_boxes).
+        """
+        indexed = list(enumerate(text_boxes))
+        indexed.sort(key=lambda x: x[1].bbox[1])  # sort by Y
+
+        # Strategy 1: single box is an exact imprint
+        for idx, box in indexed:
+            text_upper = box.text.strip().upper()
+            if text_upper in self.publisher_imprints:
+                remaining = [b for i, b in enumerate(text_boxes) if i != idx]
+                return text_upper, remaining
+
+        # Strategy 2: two adjacent boxes on same line combine to an imprint
+        for i in range(len(indexed) - 1):
+            idx1, box1 = indexed[i]
+            idx2, box2 = indexed[i + 1]
+            h1 = box1.bbox[3] - box1.bbox[1]
+            h2 = box2.bbox[3] - box2.bbox[1]
+            avg_h = (h1 + h2) / 2
+            if abs(box1.bbox[1] - box2.bbox[1]) < avg_h * 0.5:
+                left, right = (box1, box2) if box1.bbox[0] < box2.bbox[0] else (box2, box1)
+                combined = f"{left.text.strip().upper()} {right.text.strip().upper()}"
+                if combined in self.publisher_imprints:
+                    remove = {idx1, idx2}
+                    remaining = [b for i, b in enumerate(text_boxes) if i not in remove]
+                    return combined, remaining
+
+        # Strategy 3: a single word inside a box is an imprint
+        for idx, box in indexed:
+            words = box.text.strip().split()
+            for word in words:
+                if word.upper() in self.publisher_imprints:
+                    # Remove only the imprint word, keep the rest in the box
+                    rest_words = [w for w in words if w.upper() != word.upper()]
+                    new_boxes = list(text_boxes)
+                    if rest_words:
+                        new_boxes[idx] = TextBox(" ".join(rest_words), box.bbox, box.confidence)
+                    else:
+                        new_boxes.pop(idx)
+                    return word.upper(), new_boxes
+
+        return None, text_boxes
+
     def parse(self, text_boxes: List[TextBox], image_height: int, image_width: int) -> BookInfo:
         """Parse book cover from detected text boxes"""
         if not text_boxes:
             return BookInfo()
 
-        # Merge nearby boxes
-        merged = self._merge_nearby_boxes(text_boxes, image_height)
+        # Clear caches for each new book
+        self._author_cache = {}
+        self._publisher_cache = {}
 
         book = BookInfo(raw_texts=text_boxes)
+
+        # Pre-scan: detect imprint in raw text boxes BEFORE merging
+        # This prevents "OSCAR BESTSELLERS" from being merged with title text
+        imprint_text, remaining_boxes = self._detect_imprint_pre_merge(text_boxes, image_height)
+        if imprint_text:
+            book.publisher = self._resolve_imprint_to_publisher(imprint_text)
+
+        # Merge remaining boxes (imprint boxes already removed)
+        merged = self._merge_nearby_boxes(remaining_boxes, image_height)
 
         # Calculate scores
         scored = []
@@ -525,14 +572,31 @@ class BookCoverParser:
 
         used_texts = set()
 
-        # Find publisher
-        for item in scored:
-            if item['text'] in used_texts or item['is_quote']:
-                continue
-            if self._is_likely_publisher(item['text'], item['position_y_ratio']):
-                book.publisher = item['text']
-                used_texts.add(item['text'])
-                break
+        # Find publisher (only if not already found by pre-scan)
+        if not book.publisher:
+            for item in scored:
+                if item['text'] in used_texts or item['is_quote']:
+                    continue
+                if self._is_likely_publisher(item['text'], item['position_y_ratio']):
+                    book.publisher = item['text']
+                    used_texts.add(item['text'])
+                    break
+
+        # Mark imprint-related texts as used (e.g. "BESTSELLERS" adjacent to found publisher)
+        if book.publisher:
+            pub_upper = book.publisher.upper()
+            for item in scored:
+                if item['text'] in used_texts:
+                    continue
+                text_upper = item['text'].upper()
+                # Mark if combining with publisher forms a known imprint
+                combined = f"{pub_upper} {text_upper}"
+                combined2 = f"{text_upper} {pub_upper}"
+                if combined in self.publisher_imprints or combined2 in self.publisher_imprints:
+                    used_texts.add(item['text'])
+                # Also mark individual imprint words (e.g. "Bestsellers" alone)
+                elif text_upper in self.publisher_imprints:
+                    used_texts.add(item['text'])
 
         # Find author (with multi-block combination)
         author_candidates = []
@@ -557,8 +621,9 @@ class BookCoverParser:
                 for part in combined_author['parts']:
                     used_texts.add(part)
             else:
-                # Fallback: use single best candidate
+                # Fallback: prefer DB-matched authors over heuristic-only
                 author_candidates.sort(key=lambda x: (
+                    self._matches_author_database(x['text'].upper()),
                     x['position_y_ratio'] > 0.6,
                     x['prominence']
                 ), reverse=True)
@@ -744,12 +809,12 @@ class BookCoverParser:
 
         text_clean = text.strip().upper()
 
-        # Check database first (strongest signal)
-        if self._matches_author_database(text_clean):
-            return True
+        # Filter out texts with no alphabetic characters (e.g. "1", "42")
+        if not any(c.isalpha() for c in text_clean):
+            return False
 
-        # Original heuristics for texts not in database
-        if len(text_clean) < 6 or len(text_clean) > 40:
+        # Cheap filters first (before any DB query)
+        if len(text_clean) < 3 or len(text_clean) > 40:
             return False
 
         if re.search(r'\d', text_clean):
@@ -757,11 +822,24 @@ class BookCoverParser:
 
         words = text_clean.split()
 
-        if not (2 <= len(words) <= 4):
+        # Author names are 1-4 words (allow single surname for DB match)
+        if len(words) > 4:
             return False
 
         # Each word ≥3 chars (blocks "DO RS")
-        if any(len(w) < 3 for w in words):
+        if len(words) >= 2 and any(len(w) < 3 for w in words):
+            return False
+
+        # DB check for texts that look like names (2-4 words, all capitalized)
+        if 2 <= len(words) <= 4:
+            if self._matches_author_database(text_clean):
+                return True
+
+        # Heuristics for texts not in database
+        if len(text_clean) < 6:
+            return False
+
+        if not (2 <= len(words) <= 4):
             return False
 
         if not all(w[0].isupper() for w in words if w):
@@ -784,7 +862,7 @@ class BookCoverParser:
         return False
 
     def _matches_author_database(self, text: str) -> bool:
-        """Check if text matches known authors database (via SQL query)"""
+        """Check if text matches known authors database (via SQL query, cached)"""
         if not self.book_db:
             return False
 
@@ -792,22 +870,36 @@ class BookCoverParser:
         if not text_clean:
             return False
 
+        # Filter out very short texts (numbers, single chars, etc.)
+        if len(text_clean) < 3:
+            return False
+
+        # Check cache first
+        cache_key = text_clean.upper()
+        if cache_key in self._author_cache:
+            return self._author_cache[cache_key]
+
+        result = False
+
         # Check exact match via SQL
         if self.book_db.is_known_author(text_clean):
-            return True
+            result = True
+        else:
+            # Check if any word in text is a known author surname
+            words = text_clean.split()
+            for word in words:
+                if len(word) > 2 and self.book_db.is_known_author(word):
+                    result = True
+                    break
 
-        # Check if any word in text is a known author surname
-        words = text_clean.split()
-        for word in words:
-            if len(word) > 2 and self.book_db.is_known_author(word):
-                return True
+            # Fuzzy match via SQL (only if no exact match found)
+            if not result:
+                match = self.book_db.fuzzy_match_author_sql(text_clean, threshold=0.85)
+                if match:
+                    result = True
 
-        # Fuzzy match via SQL
-        match = self.book_db.fuzzy_match_author_sql(text_clean, threshold=0.85)
-        if match:
-            return True
-
-        return False
+        self._author_cache[cache_key] = result
+        return result
 
     def _similarity(self, s1: str, s2: str) -> float:
         """Calculate string similarity (0-1)"""
@@ -845,7 +937,7 @@ class BookCoverParser:
                     if text_upper in self.publisher_imprints:
                         continue
 
-                    if (text_upper in self.known_authors or
+                    if (self._matches_author_database(text_upper) or
                         self._looks_like_name_part(item['text'])):
                         nearby_blocks.append(item)
 
@@ -897,15 +989,9 @@ class BookCoverParser:
         if not (2 <= len(words) <= 4):
             return False
 
-        # Check in database
-        text_upper = text.upper()
-        if text_upper in self.known_authors:
+        # Check in database via SQL
+        if self._matches_author_database(text):
             return True
-
-        # Check if at least one word is in database (surname)
-        for word in words:
-            if word.upper() in self.known_authors:
-                return True
 
         # Fallback: standard name pattern
         if len(words) == 2:
@@ -916,26 +1002,48 @@ class BookCoverParser:
         return False
 
     def _is_likely_publisher(self, text: str, position_y_ratio: float) -> bool:
-        """Check if text is likely a publisher (via SQL query)"""
+        """Check if text is likely a publisher"""
         text_upper = text.strip().upper()
 
-        # Check imprints mapping first (small in-memory table)
+        # Check imprints mapping - exact match
         if text_upper in self.publisher_imprints:
             return True
 
-        # Check database via SQL query
-        if self.book_db and self.book_db.is_known_publisher(text_upper):
-            return True
+        # Check imprints - word-level match (for merged blocks)
+        words = text_upper.split()
+        for word in words:
+            if word in self.publisher_imprints:
+                return True
+        for i in range(len(words) - 1):
+            pair = f"{words[i]} {words[i+1]}"
+            if pair in self.publisher_imprints:
+                return True
 
-        # Original pattern matching
+        # Check database via SQL query (cached)
+        # But if text is also a known author, don't classify as publisher
+        # (many authors are also in publishers table as self-published)
+        if self.book_db:
+            if text_upper not in self._publisher_cache:
+                self._publisher_cache[text_upper] = self.book_db.is_known_publisher(text_upper)
+            if self._publisher_cache[text_upper]:
+                if not self._matches_author_database(text_upper):
+                    return True
+
+        # Pattern matching (PENGUIN, BOOKS, PRESS, etc.)
         for pattern in self.PUBLISHER_PATTERNS:
             if re.search(pattern, text, re.IGNORECASE):
                 return True
 
         # Position-based heuristic (bottom of cover)
+        # Conservative: require DB match or pattern match, not just position
         if position_y_ratio > 0.85:
             if len(text) < 30 and len(text.split()) <= 3:
-                return True
+                # Never classify known authors as publishers
+                if self.book_db and self._matches_author_database(text_upper):
+                    return False
+                # Require additional evidence beyond just position
+                if self.book_db and self.book_db.is_known_publisher(text_upper):
+                    return True
 
         return False
 
@@ -943,30 +1051,6 @@ class BookCoverParser:
 # ============================================================================
 # OCR EXECUTION
 # ============================================================================
-
-def run_ocr_easyocr(image_path):
-    """Run EasyOCR on image"""
-    try:
-        import easyocr
-    except ImportError:
-        print("❌ EasyOCR not installed. Install with: pip install easyocr")
-        sys.exit(1)
-
-    reader = easyocr.Reader(['en', 'it'], gpu=False)
-    results = reader.readtext(image_path, low_text=0.3)
-
-    text_boxes = []
-    for (bbox, text, conf) in results:
-        # Convert bbox to x1,y1,x2,y2
-        x1 = min(p[0] for p in bbox)
-        y1 = min(p[1] for p in bbox)
-        x2 = max(p[0] for p in bbox)
-        y2 = max(p[1] for p in bbox)
-
-        text_boxes.append(TextBox(text, (x1, y1, x2, y2), conf))
-
-    return text_boxes
-
 
 def run_ocr_tesseract(image_path):
     """Run Tesseract OCR on image"""
@@ -992,16 +1076,25 @@ def run_ocr_tesseract(image_path):
     return text_boxes
 
 
-def run_ocr_ppocr(image_path):
-    """Run PP-OCR on image"""
-    try:
-        from paddleocr import PaddleOCR
-    except ImportError:
-        print("❌ PaddleOCR not installed. Install with: pip install paddlepaddle paddleocr")
-        sys.exit(1)
+_ppocr_instance = None
 
-    ocr = PaddleOCR(use_angle_cls=True, lang='en', use_gpu=False, show_log=False)
-    results = ocr.ocr(image_path, cls=True)
+def run_ocr_ppocr(image_path):
+    """Run PP-OCR on image (singleton initialized by _preload_ocr_models)"""
+    global _ppocr_instance
+
+    if _ppocr_instance is None:
+        # Fallback: init here if not preloaded (e.g. standalone usage)
+        import warnings
+        warnings.filterwarnings('ignore', category=UserWarning)
+        try:
+            from paddleocr import PaddleOCR
+        except ImportError:
+            print("❌ PaddleOCR not installed. Install with: pip install 'paddleocr>=2.7,<3'")
+            sys.exit(1)
+        _ppocr_instance = PaddleOCR(use_angle_cls=True, lang='latin', use_gpu=False, show_log=False)
+        warnings.resetwarnings()
+
+    results = _ppocr_instance.ocr(image_path, cls=True)
 
     text_boxes = []
     if results and results[0]:
@@ -1021,13 +1114,346 @@ def run_ocr_ppocr(image_path):
 
 
 # ============================================================================
+# METIS-ACCELERATED PP-OCR (ENSEMBLE)
+# ============================================================================
+
+_metis_context = None
+_metis_model_instance = None
+_metis_input_info = None
+_metis_output_info = None
+
+def _init_metis_det():
+    """Initialize Metis accelerator for PP-OCR detection model"""
+    global _metis_context, _metis_model_instance, _metis_input_info, _metis_output_info
+
+    if _metis_model_instance is not None:
+        return _metis_model_instance
+
+    # Set required environment variables for Axelera runtime
+    device_dir = '/opt/axelera/device-1.5.2-1/omega'
+    os.environ['AXELERA_DEVICE_DIR'] = device_dir
+    os.environ['AIPU_RUNTIME_STAGE0_OMEGA'] = f'{device_dir}/bin/start_axelera_runtime_stage0.bin'
+    os.environ['AIPU_FIRMWARE_OMEGA'] = f'{device_dir}/bin/start_axelera_runtime.elf'
+
+    # RISC-V toolchain for kernel compilation
+    riscv_path = '/opt/axelera/riscv-gnu-newlib-toolchain-409b951ba662-7/bin'
+    if riscv_path not in os.environ.get('PATH', ''):
+        os.environ['PATH'] = riscv_path + ':' + os.environ['PATH']
+
+    try:
+        from axelera import runtime as axrt
+
+        # Load model
+        model_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  '..', 'voyager-sdk', 'build', 'ppocr-det', 'ppocr_det', '1')
+        model_path = os.path.join(model_dir, 'model.json')
+
+        if not os.path.exists(model_path):
+            print(f"   Metis model not found: {model_path}")
+            return None
+
+        _metis_context = axrt.Context()
+        model = _metis_context.load_model(model_path)
+        _metis_input_info = model.inputs()[0]
+        _metis_output_info = model.outputs()[0]
+        device = _metis_context.device_connect()
+        _metis_model_instance = device.load_model_instance(model)
+
+        print("   Metis PP-OCR det model loaded")
+        return _metis_model_instance
+
+    except Exception as e:
+        print(f"   Metis init failed: {e}")
+        return None
+
+
+def _metis_det_preprocess(image, det_size=640):
+    """Preprocess image for Metis PP-OCR detection (quantized int8 NHWC)"""
+    h, w = image.shape[:2]
+
+    # Resize keeping aspect ratio
+    ratio = min(det_size / h, det_size / w)
+    new_h, new_w = int(h * ratio), int(w * ratio)
+    resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+
+    # Convert BGR to RGB
+    rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+
+    # Pad to det_size x det_size
+    padded = np.zeros((det_size, det_size, 3), dtype=np.float32)
+    padded[:new_h, :new_w, :] = rgb.astype(np.float32)
+
+    # Normalize to [-1, 1] (PP-OCRv3 style)
+    padded = padded / 255.0
+    padded = (padded - 0.5) / 0.5
+
+    # Quantize: int8 = round(float / scale + zero_point)
+    # From manifest: quantize_params = [0.007874015718698502, -1]
+    scale = 0.007874015718698502
+    zero_point = -1
+    quantized = np.round(padded / scale + zero_point).clip(-128, 127).astype(np.int8)
+
+    # NHWC layout (already in HWC, add batch dim)
+    input_tensor = quantized.reshape(1, det_size, det_size, 3)
+
+    return input_tensor, ratio, h, w
+
+
+def _metis_det_postprocess(heatmap, orig_h, orig_w, det_size=640, thresh=0.3,
+                            min_area=50, unclip_ratio=1.5, box_thresh=0.5):
+    """Postprocess Metis detection output to bounding boxes"""
+    # Threshold heatmap
+    binary = (heatmap > thresh).astype(np.uint8) * 255
+
+    # Light horizontal dilation to connect characters on same line
+    dilation_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 1))
+    dilated = cv2.dilate(binary, dilation_kernel, iterations=1)
+
+    # Find contours
+    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    boxes = []
+    ratio = min(det_size / orig_h, det_size / orig_w)
+
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area < min_area:
+            continue
+
+        x, y, w, h = cv2.boundingRect(contour)
+
+        # Filter by mean heatmap score inside the box
+        roi = heatmap[y:y+h, x:x+w]
+        if roi.size > 0 and np.mean(roi) < box_thresh:
+            continue
+
+        # Scale back to original image coordinates
+        x1 = int(x / ratio)
+        y1 = int(y / ratio)
+        x2 = int((x + w) / ratio)
+        y2 = int((y + h) / ratio)
+
+        # Expand proportionally to box height
+        expand_x = max(3, int(h * unclip_ratio * 0.3))
+        expand_y = max(2, int(h * unclip_ratio * 0.2))
+
+        x1 = max(0, x1 - expand_x)
+        y1 = max(0, y1 - expand_y)
+        x2 = min(orig_w, x2 + expand_x)
+        y2 = min(orig_h, y2 + expand_y)
+
+        boxes.append((x1, y1, x2, y2))
+
+    # Merge overlapping boxes
+    boxes = _merge_overlapping_boxes(boxes)
+
+    return boxes
+
+
+def _merge_overlapping_boxes(boxes):
+    """Merge overlapping bounding boxes on the same text line"""
+    if not boxes:
+        return boxes
+
+    # Sort by y1 then x1
+    boxes = sorted(boxes, key=lambda b: (b[1], b[0]))
+    merged = [list(boxes[0])]
+
+    for box in boxes[1:]:
+        last = merged[-1]
+
+        # Check if on same line (y-center proximity)
+        last_cy = (last[1] + last[3]) / 2
+        box_cy = (box[1] + box[3]) / 2
+        last_h = last[3] - last[1]
+        box_h = box[3] - box[1]
+        avg_h = (last_h + box_h) / 2
+
+        # Same line: y-centers within 50% of average height
+        if abs(last_cy - box_cy) < avg_h * 0.5:
+            # Check horizontal gap (don't merge if too far apart)
+            gap = box[0] - last[2]
+            if gap < avg_h * 2:  # Max gap = 2x average height
+                # Merge
+                last[0] = min(last[0], box[0])
+                last[1] = min(last[1], box[1])
+                last[2] = max(last[2], box[2])
+                last[3] = max(last[3], box[3])
+                continue
+
+        merged.append(list(box))
+
+    return [tuple(b) for b in merged]
+
+
+def _run_metis_det_and_rec(image_path):
+    """Run Metis detection + PaddleOCR recognition on detected regions"""
+    model_inst = _init_metis_det()
+    if model_inst is None:
+        return None
+
+    # Read image
+    image = cv2.imread(image_path)
+    if image is None:
+        return None
+
+    # Preprocess for Metis
+    input_tensor, ratio, orig_h, orig_w = _metis_det_preprocess(image)
+
+    try:
+        # Use cached tensor info from _init_metis_det()
+        input_info = _metis_input_info
+        output_info = _metis_output_info
+
+        # Pad input to match hardware tensor shape (includes padding for alignment)
+        padded_shape = input_info.shape
+        input_padded = np.zeros(padded_shape, dtype=np.int8)
+        # Copy data (3 channels into padded input, respecting spatial padding)
+        unpadded = input_info.unpadded_shape
+        input_padded[:, :unpadded[1], :unpadded[2], :unpadded[3]] = input_tensor
+
+        # Allocate output
+        output_shape = output_info.shape
+        output_buf = np.zeros(output_shape, dtype=np.int8)
+
+        # Run inference
+        model_inst.run([input_padded], [output_buf])
+
+        # Dequantize output: float = (int8 - zero_point) * scale
+        out_scale = output_info.scale
+        out_zp = output_info.zero_point
+
+        output_float = (output_buf.astype(np.float32) - out_zp) * out_scale
+
+        # Output is [1, 640, 640, 64] - take first channel as heatmap
+        # Remove padding: only first channel is the actual heatmap
+        heatmap = output_float[0, :, :, 0]
+
+        # Postprocess to get boxes
+        boxes = _metis_det_postprocess(heatmap, orig_h, orig_w)
+
+        if not boxes:
+            return []
+
+        # Run PaddleOCR recognition on each detected region
+        global _ppocr_instance
+        from paddleocr import PaddleOCR
+        if _ppocr_instance is None:
+            _ppocr_instance = PaddleOCR(use_angle_cls=True, lang='latin', use_gpu=False, show_log=False)
+
+        text_boxes = []
+        for (x1, y1, x2, y2) in boxes:
+            # Crop region
+            crop = image[y1:y2, x1:x2]
+            if crop.size == 0:
+                continue
+
+            # Save temp crop for PaddleOCR
+            temp_crop = '/tmp/metis_crop_temp.jpg'
+            cv2.imwrite(temp_crop, crop)
+
+            # Run recognition only
+            rec_results = _ppocr_instance.ocr(temp_crop, cls=True)
+
+            if rec_results and rec_results[0]:
+                for line in rec_results[0]:
+                    text = line[1][0]
+                    conf = line[1][1]
+                    text_boxes.append(TextBox(text, (x1, y1, x2, y2), conf))
+            else:
+                # No text recognized in this crop
+                pass
+
+        # Clean up temp file
+        try:
+            os.remove('/tmp/metis_crop_temp.jpg')
+        except Exception:
+            pass
+
+        return text_boxes
+
+    except Exception as e:
+        print(f"   Metis inference error: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def _merge_ensemble_results(boxes_cpu, boxes_metis):
+    """Merge CPU and Metis results, picking highest confidence per text line"""
+    if not boxes_metis:
+        return boxes_cpu
+    if not boxes_cpu:
+        return boxes_metis
+
+    # Combine all boxes
+    all_boxes = []
+    for b in boxes_cpu:
+        all_boxes.append(('cpu', b))
+    for b in boxes_metis:
+        all_boxes.append(('metis', b))
+
+    # Sort by y-center position
+    all_boxes.sort(key=lambda x: (x[1].bbox[1] + x[1].bbox[3]) / 2)
+
+    # Group by text line (similar y-center)
+    lines = []
+    current_line = [all_boxes[0]]
+
+    for item in all_boxes[1:]:
+        _, box = item
+        _, prev_box = current_line[-1]
+
+        prev_cy = (prev_box.bbox[1] + prev_box.bbox[3]) / 2
+        curr_cy = (box.bbox[1] + box.bbox[3]) / 2
+        prev_h = prev_box.bbox[3] - prev_box.bbox[1]
+
+        # Same line if y-centers within 50% of height
+        if abs(curr_cy - prev_cy) < max(prev_h * 0.5, 15):
+            current_line.append(item)
+        else:
+            lines.append(current_line)
+            current_line = [item]
+    lines.append(current_line)
+
+    # For each line, pick best result
+    result = []
+    for line in lines:
+        # Pick highest confidence
+        best = max(line, key=lambda x: x[1].confidence)
+        result.append(best[1])
+
+    return result
+
+
+def run_ocr_ppocr_metis(image_path):
+    """
+    Ensemble PP-OCR: run both CPU and Metis detection, merge best results.
+    CPU provides full PP-OCR pipeline, Metis provides accelerated detection.
+    For each text line, the highest-confidence result is selected.
+    """
+    # Run CPU PP-OCR (full pipeline)
+    boxes_cpu = run_ocr_ppocr(image_path)
+
+    # Run Metis detection + CPU recognition
+    boxes_metis = _run_metis_det_and_rec(image_path)
+
+    if boxes_metis is None:
+        print("   (Metis unavailable, using CPU only)")
+        return boxes_cpu
+
+    # Merge: pick best per line
+    return _merge_ensemble_results(boxes_cpu, boxes_metis)
+
+
+# ============================================================================
 # CONTINUOUS SCANNER
 # ============================================================================
 
 class ContinuousScanner:
     """Continuous book OCR scanner"""
 
-    def __init__(self, model='easyocr', auto_mode=False, preprocessing=True, debug=False):
+    def __init__(self, model='ppocr', auto_mode=False, preprocessing=True, debug=False):
         self.model = model
         self.auto_mode = auto_mode
         self.preprocessing = preprocessing
@@ -1051,6 +1477,9 @@ class ContinuousScanner:
         self.postprocessor = OCRPostProcessor(debug=debug)
         self.parser = BookCoverParser()
 
+        # Preload OCR models before user interaction
+        self._preload_ocr_models()
+
         # Open camera
         self.rtsp_url = RTSPConfig.get_url()
         self.cap = cv2.VideoCapture(self.rtsp_url)
@@ -1058,11 +1487,58 @@ class ContinuousScanner:
             print(f"❌ Error: Cannot open camera: {self.rtsp_url}")
             sys.exit(1)
 
+    def _preload_ocr_models(self):
+        """Preload OCR models at startup (before user interaction)"""
+        if self.model in ('ppocr', 'ppocr-metis'):
+            global _ppocr_instance
+            if _ppocr_instance is None:
+                import warnings
+                warnings.filterwarnings('ignore', category=UserWarning)
+                try:
+                    from paddleocr import PaddleOCR
+                except ImportError:
+                    print("❌ PaddleOCR not installed. Install with: pip install 'paddleocr>=2.7,<3'")
+                    sys.exit(1)
+
+                model_dir = os.path.expanduser('~/.paddleocr/whl')
+                first_download = not os.path.isdir(model_dir) or len(os.listdir(model_dir)) < 3
+                if first_download:
+                    print("⬇️  Download modelli PP-OCR (Latin, ~150MB)...")
+                    _ppocr_instance = PaddleOCR(use_angle_cls=True, lang='latin', use_gpu=False, show_log=True)
+                    print("✅ Download completato")
+                else:
+                    print("⏳ Caricamento modelli PP-OCR (Latin)...", end='', flush=True)
+                    _ppocr_instance = PaddleOCR(use_angle_cls=True, lang='latin', use_gpu=False, show_log=False)
+
+                # Force full model init with a dummy inference (file path required)
+                dummy_path = '/tmp/_ppocr_warmup.jpg'
+                cv2.imwrite(dummy_path, np.zeros((64, 200, 3), dtype=np.uint8))
+                _ppocr_instance.ocr(dummy_path, cls=True)
+                try:
+                    os.remove(dummy_path)
+                except Exception:
+                    pass
+                if not first_download:
+                    print(" ✅")
+                warnings.resetwarnings()
+
+        if self.model == 'ppocr-metis':
+            print("⏳ Caricamento Metis accelerator...", end='', flush=True)
+            result = _init_metis_det()
+            if result:
+                print(" ✅")
+            else:
+                print(" (non disponibile, fallback CPU)")
+
     def _cleanup_temp_files(self):
         """Remove temporary files"""
         temp_files = [
             'temp_ocr_input.jpg',
-            'test_images/debug_preprocessed_last.jpg'
+            'test_images/debug_preprocessed_last.jpg',
+            '/tmp/scan_preview_temp.jpg',
+            '/tmp/metis_crop_temp.jpg',
+            '/tmp/ocr_pass_upscale.jpg',
+            '/tmp/ocr_pass_raw.jpg',
         ]
         for f in temp_files:
             if os.path.exists(f):
@@ -1134,7 +1610,8 @@ class ContinuousScanner:
     def _fuzzy_correct_with_databases(self, text):
         """
         Apply fuzzy matching with databases to automatically correct OCR errors.
-        Uses SQL queries instead of loading all records into memory.
+        Only queries DB for words with OCR artifacts (digits mixed with letters).
+        Clean words are left as-is (the parser does its own DB lookups later).
 
         Example: "RIORD4N" → fuzzy match → "RIORDAN" (from database)
         """
@@ -1152,6 +1629,16 @@ class ContinuousScanner:
 
             # Skip if word is a known imprint (exact match)
             if word_upper in self.parser.publisher_imprints:
+                corrected_words.append(word)
+                continue
+
+            # Only do expensive DB lookups for words with OCR artifacts
+            # (digits mixed with letters, e.g. "RIORD4N", "PCRC4")
+            has_digits = any(c.isdigit() for c in word)
+            has_letters = any(c.isalpha() for c in word)
+            has_ocr_artifacts = has_digits and has_letters
+
+            if not has_ocr_artifacts:
                 corrected_words.append(word)
                 continue
 
@@ -1184,6 +1671,60 @@ class ContinuousScanner:
 
         return ' '.join(corrected_words)
 
+    # Italian + English stopwords for filtering OCR raw text
+    STOPWORDS = {
+        # English
+        'the', 'a', 'an', 'of', 'and', 'in', 'on', 'at', 'to', 'for', 'is', 'it',
+        'by', 'with', 'from', 'or', 'not', 'but', 'was', 'are', 'be', 'has', 'had',
+        'that', 'this', 'his', 'her', 'its', 'all', 'can', 'new', 'one', 'two',
+        # Italian
+        'il', 'lo', 'la', 'le', 'gli', 'un', 'uno', 'una', 'di', 'da', 'del',
+        'dei', 'della', 'delle', 'degli', 'dal', 'dalla', 'dai', 'dalle',
+        'nel', 'nella', 'nei', 'nelle', 'sul', 'sulla', 'sui', 'sulle',
+        'con', 'per', 'tra', 'fra', 'che', 'non', 'sono', 'come', 'anche',
+        'più', 'piu', 'suo', 'sua', 'suoi', 'mio', 'mia',
+    }
+
+    def identify_book(self, book_info: dict) -> dict:
+        """
+        Identify book from OCR results by searching the database.
+
+        Collects ALL raw OCR words, filters stopwords and short words,
+        then calls BookDatabase.identify_book() for cascading search.
+
+        Returns: {matched, book, match_confidence, alternatives}
+        """
+        if not self.parser.book_db:
+            return {'matched': False, 'book': None, 'match_confidence': 0.0, 'alternatives': []}
+
+        # Collect raw words from OCR text, excluding publisher/imprint/author words
+        raw_text = book_info.get('raw_text', '')
+        title = book_info.get('title', '')
+        author = book_info.get('author', '')
+        publisher = book_info.get('publisher', '')
+
+        # Build set of words to exclude (publisher, imprints, author)
+        exclude_words = set(self.STOPWORDS)
+        for imprint in self.parser.publisher_imprints:
+            for w in imprint.lower().split():
+                if len(w) >= 3:
+                    exclude_words.add(w)
+        if publisher and publisher != '[not identified]':
+            for w in publisher.lower().split():
+                if len(w) >= 3:
+                    exclude_words.add(w)
+        # Also exclude common imprint-related words
+        exclude_words.update(['bestsellers', 'bestseller', 'edition', 'edizione'])
+
+        raw_words = []
+        if raw_text:
+            for word in re.split(r'[\s\n]+', raw_text):
+                word_clean = re.sub(r'[^\w]', '', word).lower()
+                if len(word_clean) >= 3 and word_clean not in exclude_words:
+                    raw_words.append(word_clean)
+
+        return self.parser.book_db.identify_book(title, author, publisher, raw_words)
+
     def _load_loading_area(self):
         """Load loading area coordinates"""
         config_file = 'test_images/loading_area.txt'
@@ -1196,17 +1737,23 @@ class ContinuousScanner:
 
     def capture_and_crop(self):
         """Capture FRESH frame and crop to loading area"""
-        # Wait for camera stabilization
-        time.sleep(0.5)
+        # Flush RTSP buffer by grabbing (no decode) for 2 seconds.
+        # During OCR (3-8s) the buffer accumulates hundreds of frames;
+        # grab() is fast (~0.5ms) vs read() (~15ms) so we can drain it quickly.
+        flush_duration = 2.0
+        flush_start = time.time()
+        flushed = 0
+        while time.time() - flush_start < flush_duration:
+            if not self.cap.grab():
+                # Stream lost, try reconnect
+                self.cap.release()
+                self.cap = cv2.VideoCapture(self.rtsp_url)
+                if not self.cap.isOpened():
+                    return None, None
+                break
+            flushed += 1
 
-        # Flush RTSP buffer (30 frames = 1 second at 30fps)
-        for _ in range(30):
-            ret, frame = self.cap.read()
-            if not ret:
-                return None, None
-            time.sleep(0.01)
-
-        # Get fresh frame
+        # Get fresh frame (decode only this one)
         ret, frame = self.cap.read()
         if not ret:
             return None, None
@@ -1217,46 +1764,96 @@ class ContinuousScanner:
 
         return frame, cropped
 
+    def _run_ocr_multipass(self, image, ocr_func):
+        """
+        Multi-pass OCR: different preprocessings capture different text types.
+        Pass 1: Upscale 2x + light denoise → small text (publisher, subtitle)
+        Pass 2: Raw original image → large artistic text (title)
+        Merge by picking highest confidence per text line.
+        """
+        scale = 2.0
+
+        # Pass 1: Upscale + denoise
+        print(f"   └─ Pass 1: Upscale {scale:.0f}x + denoise...", end='', flush=True)
+        upscaled = self.preprocessor.preprocess_for_ppocr_upscale(image, scale)
+        temp_up = '/tmp/ocr_pass_upscale.jpg'
+        cv2.imwrite(temp_up, upscaled)
+        if self.debug:
+            cv2.imwrite('test_images/debug_upscaled_last.jpg', upscaled)
+        print(" ✅")
+
+        print(f"   └─ Pass 1: OCR...", end='', flush=True)
+        boxes_upscale = ocr_func(temp_up)
+        # Scale bboxes back to original image coordinates
+        boxes_upscale = [
+            TextBox(b.text,
+                    (b.bbox[0]/scale, b.bbox[1]/scale, b.bbox[2]/scale, b.bbox[3]/scale),
+                    b.confidence)
+            for b in boxes_upscale
+        ]
+        print(f" ✅ ({len(boxes_upscale)} blocks)")
+
+        # Pass 2: Raw image
+        print(f"   └─ Pass 2: Raw image OCR...", end='', flush=True)
+        temp_raw = '/tmp/ocr_pass_raw.jpg'
+        cv2.imwrite(temp_raw, image)
+        boxes_raw = ocr_func(temp_raw)
+        print(f" ✅ ({len(boxes_raw)} blocks)")
+
+        # Merge: pick best confidence per text line
+        merged = _merge_ensemble_results(boxes_upscale, boxes_raw)
+        print(f"   └─ Merged: {len(merged)} blocks (from {len(boxes_upscale)} upscale + {len(boxes_raw)} raw)")
+
+        # Cleanup temp files
+        for f in [temp_up, temp_raw]:
+            try:
+                os.remove(f)
+            except Exception:
+                pass
+
+        return merged
+
     def run_ocr(self, image, timestamp=None):
         """Run OCR with preprocessing and postprocessing"""
-        # Preprocess
-        if self.preprocessing:
-            print(f"   └─ Preprocessing image...", end='', flush=True)
-            if self.model == 'tesseract':
-                preprocessed = self.preprocessor.preprocess_for_tesseract(image)
-            elif self.model == 'ppocr':
-                preprocessed = self.preprocessor.preprocess_for_ppocr(image)
-            else:  # easyocr
-                preprocessed = self.preprocessor.preprocess_for_easyocr(image)
-
-            temp_path = 'temp_ocr_input.jpg'
-            cv2.imwrite(temp_path, preprocessed)
-
-            # Save debug image if debug mode (overwrite same file each time)
-            if self.debug:
-                debug_path = 'test_images/debug_preprocessed_last.jpg'
-                cv2.imwrite(debug_path, preprocessed)
-                print(f" ✅ (debug: {debug_path})")
-            else:
-                print(" ✅")
-        else:
-            temp_path = 'temp_ocr_input.jpg'
-            cv2.imwrite(temp_path, image)
-
-        # Run OCR
-        print(f"   └─ Text detection & recognition...", end='', flush=True)
-
+        # Select OCR function
         if self.model == 'tesseract':
-            text_boxes = run_ocr_tesseract(temp_path)
+            ocr_func = run_ocr_tesseract
         elif self.model == 'ppocr':
-            text_boxes = run_ocr_ppocr(temp_path)
-        else:  # easyocr
-            text_boxes = run_ocr_easyocr(temp_path)
+            ocr_func = run_ocr_ppocr
+        elif self.model == 'ppocr-metis':
+            ocr_func = run_ocr_ppocr_metis
+        else:
+            raise ValueError(f"Unknown OCR model: {self.model}")
 
-        print(" ✅")
+        # Multi-pass OCR for PP-OCR models with preprocessing
+        if self.preprocessing and self.model in ('ppocr', 'ppocr-metis'):
+            text_boxes = self._run_ocr_multipass(image, ocr_func)
+        else:
+            # Single pass (tesseract or no-preprocessing)
+            if self.preprocessing:
+                print(f"   └─ Preprocessing image...", end='', flush=True)
+                preprocessed = self.preprocessor.preprocess_for_tesseract(image)
+
+                temp_path = 'temp_ocr_input.jpg'
+                cv2.imwrite(temp_path, preprocessed)
+
+                if self.debug:
+                    debug_path = 'test_images/debug_preprocessed_last.jpg'
+                    cv2.imwrite(debug_path, preprocessed)
+                    print(f" ✅ (debug: {debug_path})")
+                else:
+                    print(" ✅")
+            else:
+                temp_path = 'temp_ocr_input.jpg'
+                cv2.imwrite(temp_path, image)
+
+            print(f"   └─ Text detection & recognition...", end='', flush=True)
+            text_boxes = ocr_func(temp_path)
+            print(" ✅")
 
         # Apply word corrections AND fuzzy matching before parsing
         # This ensures parser sees corrected text (OLIMPO not OLMRQ)
+        print(f"   └─ Fuzzy DB correction ({len(text_boxes)} blocks)...", end='', flush=True)
         corrected_text_boxes = []
         for box in text_boxes:
             # First apply exact word corrections
@@ -1271,8 +1868,10 @@ class ContinuousScanner:
             corrected_box = CorrectedBox(corrected_text, box.confidence, box.bbox)
             corrected_text_boxes.append(corrected_box)
 
+        print(" ✅")
+
         # Parse
-        print(f"🧠 [4/5] Parsing book information...", end='', flush=True)
+        print(f"🧠 [4/6] Parsing book information...", end='', flush=True)
         img_h, img_w = image.shape[:2]
         book_info = self.parser.parse(corrected_text_boxes, img_h, img_w)
 
@@ -1291,7 +1890,7 @@ class ContinuousScanner:
 
         return improved
 
-    def display_result(self, book_info, show_raw=True):
+    def display_result(self, book_info, show_raw=True, db_result=None):
         """Display OCR result"""
         print("\n" + "="*70)
         print(f"   📚 BOOK #{self.book_count}")
@@ -1301,6 +1900,38 @@ class ContinuousScanner:
         print(f"Publisher:  {book_info['publisher']}")
         print(f"Confidence: {book_info['confidence']:.2f}")
         print("="*70)
+
+        # Database identification result
+        if db_result and db_result.get('matched') and db_result.get('book'):
+            book = db_result['book']
+            confidence_pct = int(db_result['match_confidence'] * 100)
+            print(f"\n   📖 LIBRO IDENTIFICATO ({confidence_pct}% match)")
+            print("-" * 70)
+            print(f"  Titolo:    {book.title}")
+            print(f"  Autore:    {book.author}")
+            if book.publisher:
+                print(f"  Editore:   {book.publisher}")
+            if book.isbn:
+                print(f"  ISBN:      {book.isbn}")
+            if book.year:
+                print(f"  Anno:      {book.year}")
+            if book.language:
+                lang_names = {'en': 'English', 'it': 'Italiano', 'fr': 'Français',
+                              'es': 'Español', 'de': 'Deutsch'}
+                print(f"  Lingua:    {lang_names.get(book.language, book.language)}")
+            print("-" * 70)
+
+            # Show alternatives
+            alternatives = db_result.get('alternatives', [])
+            if alternatives:
+                print("  Alternative possibili:")
+                for alt_book, alt_score in alternatives:
+                    alt_pct = int(alt_score * 100)
+                    pub_info = f" ({alt_book.publisher})" if alt_book.publisher else ""
+                    print(f"    [{alt_pct}%] {alt_book.title} - {alt_book.author}{pub_info}")
+                print("-" * 70)
+        elif db_result is not None:
+            print("\n   📖 Libro non trovato nel database")
 
         if show_raw and 'raw_text' in book_info:
             print("\n📝 All detected text blocks:")
@@ -1360,7 +1991,7 @@ class ContinuousScanner:
                         continue
 
                 # Capture
-                print("\n📷 [1/5] Flushing camera buffer...", end='', flush=True)
+                print("\n📷 [1/6] Flushing camera buffer...", end='', flush=True)
                 full_frame, cropped = self.capture_and_crop()
 
                 if cropped is None:
@@ -1368,7 +1999,7 @@ class ContinuousScanner:
                     continue
 
                 print(" ✅")
-                print(f"📐 [2/5] Cropping to {cropped.shape[1]}x{cropped.shape[0]}px...", end='', flush=True)
+                print(f"📐 [2/6] Cropping to {cropped.shape[1]}x{cropped.shape[0]}px...", end='', flush=True)
 
                 # Save capture
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1379,16 +2010,24 @@ class ContinuousScanner:
                 print(" ✅")
 
                 # OCR
-                print(f"🔍 [3/5] Running OCR ({self.model})...")
+                print(f"🔍 [3/6] Running OCR ({self.model})...")
                 book_info = self.run_ocr(cropped, timestamp)
-                print("✅ [5/5] OCR completed")
+                print("✅ [5/6] OCR completed")
+
+                # Database identification
+                print("🔎 [6/6] Ricerca nel database...", end='', flush=True)
+                db_result = self.identify_book(book_info)
+                if db_result['matched']:
+                    print(" ✅")
+                else:
+                    print(" (non trovato)")
 
                 # Display
                 self.book_count += 1
-                self.display_result(book_info)
+                self.display_result(book_info, db_result=db_result)
 
                 # Save to log
-                self._log_result(timestamp, book_info)
+                self._log_result(timestamp, book_info, db_result=db_result)
 
                 # Delete captured image to save space
                 self._delete_last_capture(capture_path)
@@ -1403,17 +2042,18 @@ class ContinuousScanner:
 
         finally:
             self.cap.release()
+            self._cleanup_temp_files()
             self.show_stats()
             print("\n✅ Session ended")
 
-    def _log_result(self, timestamp, book_info):
+    def _log_result(self, timestamp, book_info, db_result=None):
         """Log result to CSV file"""
         log_file = 'ocr_results.csv'
 
         # Create header if needed
         if not os.path.exists(log_file):
             with open(log_file, 'w') as f:
-                f.write("timestamp,title,author,publisher,confidence\n")
+                f.write("timestamp,title,author,publisher,confidence,matched_title,matched_isbn,match_confidence\n")
 
         # Append result
         with open(log_file, 'a') as f:
@@ -1422,7 +2062,15 @@ class ContinuousScanner:
             publisher = book_info['publisher'].replace(',', ';')
             confidence = book_info['confidence']
 
-            f.write(f"{timestamp},{title},{author},{publisher},{confidence:.2f}\n")
+            matched_title = ''
+            matched_isbn = ''
+            match_confidence = ''
+            if db_result and db_result.get('matched') and db_result.get('book'):
+                matched_title = db_result['book'].title.replace(',', ';')
+                matched_isbn = db_result['book'].isbn
+                match_confidence = f"{db_result['match_confidence']:.2f}"
+
+            f.write(f"{timestamp},{title},{author},{publisher},{confidence:.2f},{matched_title},{matched_isbn},{match_confidence}\n")
 
 
 # ============================================================================
@@ -1435,18 +2083,18 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python3 scan_books.py                    # Manual mode with EasyOCR
-  python3 scan_books.py --auto             # Auto mode (3s delay)
-  python3 scan_books.py --model tesseract  # Use Tesseract
-  python3 scan_books.py --model ppocr      # Use PP-OCR
-  python3 scan_books.py --no-preprocessing # Skip preprocessing
+  python3 scan_books.py                        # Manual mode with PP-OCR
+  python3 scan_books.py --auto                 # Auto mode (3s delay)
+  python3 scan_books.py --model ppocr-metis    # Ensemble CPU+Metis (best quality)
+  python3 scan_books.py --model tesseract      # Use Tesseract
+  python3 scan_books.py --no-preprocessing     # Skip preprocessing
         """
     )
     parser.add_argument(
         '--model',
-        choices=['tesseract', 'ppocr', 'easyocr'],
-        default='easyocr',
-        help="OCR model (default: easyocr)"
+        choices=['tesseract', 'ppocr', 'ppocr-metis'],
+        default='ppocr',
+        help="OCR model (default: ppocr)"
     )
     parser.add_argument(
         '--auto',

@@ -444,7 +444,22 @@ def save_calibration(rectangle):
 # MAIN
 # ============================================================================
 
+def cleanup_temp_files():
+    """Remove temporary files created by calibration"""
+    import glob
+    temp_files = ['/tmp/calibration_preview_temp.jpg']
+    temp_files.extend(glob.glob('debug_*.jpg'))
+    for f in temp_files:
+        if os.path.exists(f):
+            try:
+                os.remove(f)
+            except Exception:
+                pass
+
+
 def main():
+    cleanup_temp_files()
+
     parser = argparse.ArgumentParser(
         description="Automatic loading area calibration"
     )
@@ -493,6 +508,8 @@ def main():
     print("  1. Verify preview: test_images/calibration_preview.jpg")
     print("  2. Run book scanning: python3 scan_books.py")
     print("=" * 70)
+
+    cleanup_temp_files()
 
 
 if __name__ == "__main__":

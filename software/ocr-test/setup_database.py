@@ -15,6 +15,7 @@ Usage:
     python3 setup_database.py stats             # Show database statistics
     python3 setup_database.py add "Title" "Author" "Publisher"
     python3 setup_database.py search "query"
+    python3 setup_database.py create-fts          # Build FTS5 full-text index
     python3 setup_database.py add-imprint "OSCAR" "MONDADORI"
 
 Data Source: Open Library (openlibrary.org)
@@ -76,6 +77,12 @@ class BookDatabase:
         self._authors_cache = None
         self._publishers_cache = None
         self._imprints_cache = None
+        self._has_fts_cache = None
+        # Persistent read-only connection for queries (avoids repeated connect on 18GB DB)
+        self._read_conn = sqlite3.connect(self.db_path)
+        self._read_conn.execute("PRAGMA query_only = ON")
+        self._read_conn.execute("PRAGMA mmap_size = 268435456")  # 256MB mmap for faster reads
+        self._read_conn.execute("PRAGMA case_sensitive_like = ON")  # Enable index use for LIKE prefix%
 
     def _init_db(self):
         """Initialize database schema"""
@@ -235,61 +242,139 @@ class BookDatabase:
         return results
 
     def fuzzy_match_title(self, query: str, threshold: float = 0.6, limit: int = 5) -> List[Tuple[Book, float]]:
-        """Fuzzy match title against database"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('SELECT title, title_normalized, author, publisher, isbn, year, language FROM books')
-
+        """
+        Fuzzy match title against database (memory efficient).
+        Uses SQL queries (FTS5 + LIKE) to narrow candidates, then scores with SequenceMatcher.
+        """
         query_norm = self.normalize(query)
-        matches = []
+        if not query_norm:
+            return []
 
-        for row in cursor.fetchall():
-            ratio = SequenceMatcher(None, query_norm, row[1]).ratio()
+        candidates = []
+
+        # Strategy 1: FTS5 keyword search (fastest, best recall)
+        words = query_norm.split()
+        if self.has_fts_index() and words:
+            fts_results = self.search_title_fts(words, limit=100)
+            candidates.extend(fts_results)
+
+        # Strategy 2: LIKE prefix on first significant word
+        sig_words = [w for w in words if len(w) >= 3]
+        if sig_words:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("PRAGMA case_sensitive_like = ON")
+            cursor = conn.cursor()
+            for word in sig_words[:2]:
+                cursor.execute('''
+                    SELECT id, title, title_normalized, author, author_normalized,
+                           publisher, isbn, year, language
+                    FROM books WHERE title_normalized LIKE ?
+                    LIMIT 50
+                ''', (f'{word}%',))
+                candidates.extend(cursor.fetchall())
+            # Also try full prefix
+            prefix = ' '.join(sig_words[:3])
+            cursor.execute('''
+                SELECT id, title, title_normalized, author, author_normalized,
+                       publisher, isbn, year, language
+                FROM books WHERE title_normalized LIKE ?
+                LIMIT 50
+            ''', (f'{prefix}%',))
+            candidates.extend(cursor.fetchall())
+            conn.close()
+
+        # Deduplicate by id
+        seen = set()
+        unique = []
+        for row in candidates:
+            if isinstance(row, tuple) and len(row) >= 9 and row[0] not in seen:
+                seen.add(row[0])
+                unique.append(row)
+
+        # Score with SequenceMatcher
+        matches = []
+        for row in unique:
+            ratio = SequenceMatcher(None, query_norm, row[2]).ratio()
             if ratio >= threshold:
-                book = Book(title=row[0], author=row[2], publisher=row[3],
-                           isbn=row[4], year=row[5], language=row[6])
+                book = Book(title=row[1], author=row[3], publisher=row[5],
+                           isbn=row[6], year=row[7], language=row[8])
                 matches.append((book, ratio))
 
-        conn.close()
         matches.sort(key=lambda x: x[1], reverse=True)
         return matches[:limit]
 
     def fuzzy_match_words(self, words: List[str], threshold: float = 0.7, limit: int = 5) -> List[Tuple[Book, float]]:
-        """Match OCR words against book titles"""
+        """
+        Match OCR words against book titles (memory efficient).
+        Uses SQL queries (FTS5 + LIKE) to narrow candidates, then scores.
+        """
         combined = ' '.join(words)
         combined_norm = self.normalize(combined)
+        if not combined_norm:
+            return []
 
+        stopwords = {'the', 'a', 'an', 'of', 'and', 'in', 'on', 'at', 'to',
+                      'il', 'la', 'lo', 'gli', 'le', 'di', 'da'}
+
+        # Clean words for search
+        sig_words = [w for w in combined_norm.split() if len(w) >= 3 and w not in stopwords]
+        if not sig_words:
+            return []
+
+        candidates = []
+
+        # Strategy 1: FTS5 keyword search
+        if self.has_fts_index():
+            fts_results = self.search_title_fts(sig_words, limit=100)
+            candidates.extend(fts_results)
+
+        # Strategy 2: LIKE prefix on individual significant words (indexed with case_sensitive_like)
         conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA case_sensitive_like = ON")
         cursor = conn.cursor()
-        cursor.execute('SELECT title, title_normalized, author, publisher, isbn, year, language FROM books')
+        for word in sig_words[:3]:
+            cursor.execute('''
+                SELECT id, title, title_normalized, author, author_normalized,
+                       publisher, isbn, year, language
+                FROM books WHERE title_normalized LIKE ?
+                LIMIT 50
+            ''', (f'{word}%',))
+            candidates.extend(cursor.fetchall())
+        conn.close()
 
+        # Deduplicate by id
+        seen = set()
+        unique = []
+        for row in candidates:
+            if isinstance(row, tuple) and len(row) >= 9 and row[0] not in seen:
+                seen.add(row[0])
+                unique.append(row)
+
+        # Score candidates
+        query_words = set(combined_norm.split()) - stopwords
         matches = []
-        stopwords = {'the', 'a', 'an', 'of', 'and', 'in', 'on', 'at', 'to', 'il', 'la', 'lo', 'gli', 'le', 'di', 'da'}
 
-        for row in cursor.fetchall():
-            title_norm = row[1]
+        for row in unique:
+            title_norm = row[2]
 
             # Direct similarity
             ratio1 = SequenceMatcher(None, combined_norm, title_norm).ratio()
 
             # Word overlap (order-independent)
             title_words = set(title_norm.split()) - stopwords
-            query_words = set(combined_norm.split()) - stopwords
-
             if title_words and query_words:
                 overlap = len(title_words & query_words)
-                ratio2 = overlap / len(title_words) if title_words else 0
+                ratio2 = overlap / len(title_words)
             else:
                 ratio2 = 0
 
             best_ratio = max(ratio1, ratio2)
 
             if best_ratio >= threshold:
-                book = Book(title=row[0], author=row[2], publisher=row[3],
-                           isbn=row[4], year=row[5], language=row[6])
+                book = Book(title=row[1], author=row[3], publisher=row[5],
+                           isbn=row[6], year=row[7], language=row[8])
                 matches.append((book, best_ratio))
 
-        conn.close()
         matches.sort(key=lambda x: x[1], reverse=True)
         return matches[:limit]
 
@@ -349,13 +434,10 @@ class BookDatabase:
         """Check if author is known (SQL query, no memory load)"""
         if not name:
             return False
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
+        cursor = self._read_conn.cursor()
         name_norm = self.normalize(name)
         cursor.execute('SELECT 1 FROM authors WHERE name_normalized = ? LIMIT 1', (name_norm,))
-        result = cursor.fetchone() is not None
-        conn.close()
-        return result
+        return cursor.fetchone() is not None
 
     def search_author(self, name: str, limit: int = 5) -> List[str]:
         """Search authors by name (SQL LIKE query)"""
@@ -380,32 +462,29 @@ class BookDatabase:
         if not name or len(name) < 3:
             return None
 
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        name_upper = name.upper()
+        cursor = self._read_conn.cursor()
+        name_norm = self.normalize(name)
 
-        # First try exact match
-        cursor.execute('SELECT name FROM authors WHERE UPPER(name) = ? LIMIT 1', (name_upper,))
+        # First try exact match (uses idx_author_name)
+        cursor.execute('SELECT name FROM authors WHERE name_normalized = ? LIMIT 1', (name_norm,))
         result = cursor.fetchone()
         if result:
-            conn.close()
             return result[0]
 
-        # Try prefix match (for OCR errors at end of word)
-        if len(name) >= 4:
-            prefix = name_upper[:len(name)-1]
+        # Try prefix match for OCR errors at end of word (uses idx_author_name with case_sensitive_like)
+        if len(name_norm) >= 4:
+            prefix = name_norm[:len(name_norm)-1]
             cursor.execute(
-                'SELECT name FROM authors WHERE UPPER(name) LIKE ? ORDER BY book_count DESC LIMIT 10',
+                'SELECT name FROM authors WHERE name_normalized LIKE ? ORDER BY book_count DESC LIMIT 10',
                 (f'{prefix}%',)
             )
             candidates = cursor.fetchall()
+            name_upper = name.upper()
             for (candidate,) in candidates:
                 ratio = SequenceMatcher(None, name_upper, candidate.upper()).ratio()
                 if ratio >= threshold:
-                    conn.close()
                     return candidate
 
-        conn.close()
         return None
 
     # =========================================================================
@@ -464,13 +543,10 @@ class BookDatabase:
         """Check if publisher is known (SQL query, no memory load)"""
         if not name:
             return False
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
+        cursor = self._read_conn.cursor()
         name_norm = self.normalize(name)
         cursor.execute('SELECT 1 FROM publishers WHERE name_normalized = ? LIMIT 1', (name_norm,))
-        result = cursor.fetchone() is not None
-        conn.close()
-        return result
+        return cursor.fetchone() is not None
 
     def search_publisher(self, name: str, limit: int = 5) -> List[str]:
         """Search publishers by name (SQL LIKE query)"""
@@ -495,32 +571,29 @@ class BookDatabase:
         if not name or len(name) < 3:
             return None
 
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        name_upper = name.upper()
+        cursor = self._read_conn.cursor()
+        name_norm = self.normalize(name)
 
-        # First try exact match
-        cursor.execute('SELECT name FROM publishers WHERE UPPER(name) = ? LIMIT 1', (name_upper,))
+        # First try exact match (uses idx_publisher_name)
+        cursor.execute('SELECT name FROM publishers WHERE name_normalized = ? LIMIT 1', (name_norm,))
         result = cursor.fetchone()
         if result:
-            conn.close()
             return result[0]
 
-        # Try prefix match (for OCR errors at end of word)
-        if len(name) >= 4:
-            prefix = name_upper[:len(name)-1]
+        # Try prefix match for OCR errors at end of word (uses idx_publisher_name with case_sensitive_like)
+        if len(name_norm) >= 4:
+            prefix = name_norm[:len(name_norm)-1]
             cursor.execute(
-                'SELECT name FROM publishers WHERE UPPER(name) LIKE ? ORDER BY book_count DESC LIMIT 10',
+                'SELECT name FROM publishers WHERE name_normalized LIKE ? ORDER BY book_count DESC LIMIT 10',
                 (f'{prefix}%',)
             )
             candidates = cursor.fetchall()
+            name_upper = name.upper()
             for (candidate,) in candidates:
                 ratio = SequenceMatcher(None, name_upper, candidate.upper()).ratio()
                 if ratio >= threshold:
-                    conn.close()
                     return candidate
 
-        conn.close()
         return None
 
     # =========================================================================
@@ -563,6 +636,343 @@ class BookDatabase:
     def get_parent_publisher(self, imprint: str) -> Optional[str]:
         """Get parent publisher for an imprint"""
         return self.get_all_imprints().get(imprint.upper())
+
+    # =========================================================================
+    # FTS5 FULL-TEXT SEARCH
+    # =========================================================================
+
+    def _create_fts_index(self):
+        """
+        Create FTS5 virtual table on title_normalized for fast keyword search.
+        One-time operation (~20-40 min on 55M rows). Idempotent.
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Check if FTS table already exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='books_fts'")
+        if cursor.fetchone():
+            print("FTS5 index already exists. Rebuilding...")
+            cursor.execute("DROP TABLE books_fts")
+
+        print("Creating FTS5 virtual table...")
+        cursor.execute('''
+            CREATE VIRTUAL TABLE books_fts USING fts5(
+                title_normalized,
+                content='books',
+                content_rowid='id'
+            )
+        ''')
+
+        print("Populating FTS5 index (this may take a while)...")
+        cursor.execute('''
+            INSERT INTO books_fts(rowid, title_normalized)
+            SELECT id, title_normalized FROM books
+        ''')
+
+        conn.commit()
+        conn.close()
+        print("FTS5 index created successfully.")
+
+    def has_fts_index(self) -> bool:
+        """Check if FTS5 index exists (cached)"""
+        if self._has_fts_cache is not None:
+            return self._has_fts_cache
+        cursor = self._read_conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='books_fts'")
+        self._has_fts_cache = cursor.fetchone() is not None
+        return self._has_fts_cache
+
+    def search_title_fts(self, words: List[str], limit: int = 50,
+                         use_and: bool = False) -> List[Tuple]:
+        """
+        Fast FTS5 keyword search on title_normalized.
+        use_and=True: all words must match (high precision)
+        use_and=False: any word matches (broad recall)
+        """
+        if not words:
+            return []
+
+        cursor = self._read_conn.cursor()
+
+        # Build FTS5 query: each word as prefix match
+        fts_terms = []
+        for w in words:
+            w_clean = re.sub(r'[^\w]', '', w.lower())
+            if len(w_clean) >= 3:
+                fts_terms.append(f'"{w_clean}"*')
+
+        if not fts_terms:
+            return []
+
+        joiner = ' AND ' if use_and else ' OR '
+        fts_query = joiner.join(fts_terms)
+
+        try:
+            cursor.execute('''
+                SELECT b.id, b.title, b.title_normalized, b.author, b.author_normalized,
+                       b.publisher, b.isbn, b.year, b.language
+                FROM books_fts f
+                JOIN books b ON b.id = f.rowid
+                WHERE books_fts MATCH ?
+                LIMIT ?
+            ''', (fts_query, limit))
+            results = cursor.fetchall()
+        except Exception:
+            results = []
+
+        return results
+
+    # =========================================================================
+    # BOOK IDENTIFICATION (CASCADING SEARCH)
+    # =========================================================================
+
+    def identify_book(self, title: str, author: str, publisher: str,
+                      raw_words: List[str]) -> dict:
+        """
+        Identify a book from OCR data using progressive refinement.
+
+        Strategy:
+        1. Author exact match by name (indexed)
+        2. Author + title prefix (indexed)
+        3. FTS5 keyword search on raw OCR words
+        4. Resolve author name → OL key via FTS candidates, then expand search
+        5. Score all candidates with title + author + publisher + raw_words
+
+        Returns: {matched, book, match_confidence, alternatives}
+        """
+        result = {
+            'matched': False,
+            'book': None,
+            'match_confidence': 0.0,
+            'alternatives': []
+        }
+
+        title_norm = self.normalize(title) if title and title != '[not identified]' else ''
+        author_norm = self.normalize(author) if author and author != '[not identified]' else ''
+        publisher_norm = self.normalize(publisher) if publisher and publisher != '[not identified]' else ''
+
+        # Clean raw words (for FTS and scoring)
+        raw_words_clean = [w.lower() for w in raw_words if len(w) >= 3]
+
+        # Collect all author name candidates (parsed author + cross-field from publisher)
+        author_candidates = []
+        if author_norm:
+            author_candidates.append(author_norm)
+        if publisher_norm and publisher_norm != author_norm:
+            author_candidates.append(publisher_norm)
+
+        candidates = set()
+
+        def _add_rows(rows):
+            for r in rows:
+                if isinstance(r, tuple) and len(r) >= 9:
+                    candidates.add(r)
+
+        cursor = self._read_conn.cursor()
+
+        # --- Step 1: Author exact match by name (indexed, instant) ---
+        for auth in author_candidates:
+            cursor.execute('''
+                SELECT id, title, title_normalized, author, author_normalized,
+                       publisher, isbn, year, language
+                FROM books WHERE author_normalized = ? LIMIT 50
+            ''', (auth,))
+            _add_rows(cursor.fetchall())
+
+        # --- Step 2: Author + title prefix (indexed, instant) ---
+        title_words = title_norm.split() if title_norm else []
+        for auth in author_candidates:
+            if title_words:
+                _add_rows(self._search_author_title(auth, title_norm))
+                for tw in title_words:
+                    if len(tw) >= 4:
+                        _add_rows(self._search_author_title(auth, tw))
+
+        # --- Step 3: FTS5 keyword search (fast, broad recall) ---
+        sig_words = [w for w in raw_words_clean if len(w) >= 4]
+        if raw_words_clean and self.has_fts_index():
+            from itertools import combinations
+            if len(sig_words) >= 2:
+                for w1, w2 in combinations(sig_words[:8], 2):
+                    _add_rows(self.search_title_fts([w1, w2], limit=30, use_and=True))
+            if len(candidates) < 5:
+                _add_rows(self.search_title_fts(sig_words[:5], limit=50, use_and=False))
+
+        # --- Step 4: Resolve author OL key from FTS candidates ---
+        # Books in the DB have OL keys as author (e.g. "OL30765A" = Rick Riordan).
+        # Infer the OL key by finding the most common author among FTS candidates,
+        # then search for more books by that author + our keywords.
+        resolved_ol_keys = set()
+        if candidates and author_norm:
+            from collections import Counter
+            author_counter = Counter()
+            for row in candidates:
+                auth_val = row[4]  # author_normalized
+                if self._OL_KEY_RE.match(auth_val):
+                    author_counter[auth_val] += 1
+            # Use the top OL keys (most common among candidates)
+            for ol_key, count in author_counter.most_common(3):
+                if count >= 2 or len(author_counter) == 1:
+                    resolved_ol_keys.add(ol_key)
+
+            # Search for more books by resolved OL keys + title keywords
+            for ol_key in resolved_ol_keys:
+                cursor.execute('''
+                    SELECT id, title, title_normalized, author, author_normalized,
+                           publisher, isbn, year, language
+                    FROM books WHERE author_normalized = ? LIMIT 100
+                ''', (ol_key,))
+                _add_rows(cursor.fetchall())
+                # Also try OL key + title keyword prefix
+                for tw in sig_words[:5]:
+                    if len(tw) >= 4:
+                        _add_rows(self._search_author_title(ol_key, tw))
+
+        # --- Step 5: Publisher-filtered FTS (if publisher is known) ---
+        # Use publisher as additional filter to prefer local editions
+        if publisher_norm and candidates:
+            publisher_filtered = [
+                r for r in candidates
+                if publisher_norm in self.normalize(r[5] or '')
+            ]
+            # If we have publisher-filtered results, give them priority later in scoring
+
+        if not candidates:
+            return result
+
+        # --- Step 6: Score all candidates ---
+        scored = []
+        for row in candidates:
+            book = Book(
+                title=row[1], author=row[3], publisher=row[5],
+                isbn=row[6], year=row[7], language=row[8]
+            )
+            score = self._score_match(
+                book, title_norm, author_norm, publisher_norm, raw_words_clean,
+                resolved_ol_keys=resolved_ol_keys
+            )
+            if score > 0.20:
+                scored.append((book, score))
+
+        if not scored:
+            return result
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+
+        best_book, best_score = scored[0]
+        result['matched'] = best_score >= 0.40
+        result['book'] = best_book
+        result['match_confidence'] = best_score
+        result['alternatives'] = scored[1:4]
+
+        # Replace OL key author with the human-readable OCR name
+        if author_norm and result['book']:
+            if self._OL_KEY_RE.match(self.normalize(result['book'].author)):
+                result['book'].author = author
+            for alt_book, _ in result['alternatives']:
+                if self._OL_KEY_RE.match(self.normalize(alt_book.author)):
+                    alt_book.author = author
+
+        return result
+
+    def _search_author_title(self, author_norm: str, title_norm: str,
+                              limit: int = 20) -> List[Tuple]:
+        """Search by exact author + title prefix (both indexed, instant)"""
+        cursor = self._read_conn.cursor()
+
+        title_prefix = title_norm.split()[0] if title_norm else ''
+        if not title_prefix or len(title_prefix) < 3:
+            return []
+
+        cursor.execute('''
+            SELECT id, title, title_normalized, author, author_normalized,
+                   publisher, isbn, year, language
+            FROM books
+            WHERE author_normalized = ? AND title_normalized LIKE ?
+            LIMIT ?
+        ''', (author_norm, f'{title_prefix}%', limit))
+
+        return cursor.fetchall()
+
+    _OL_KEY_RE = re.compile(r'^ol\d+a$', re.IGNORECASE)
+
+    def _score_match(self, book: 'Book', title_norm: str, author_norm: str,
+                     publisher_norm: str, raw_words: List[str],
+                     resolved_ol_keys: Set[str] = None) -> float:
+        """
+        Score a candidate book match.
+
+        When book author is an OL key, checks if it matches a resolved key
+        (from FTS candidate analysis). This bridges OCR author names to OL keys.
+
+        Weights: raw_words 0.40, title 0.15, author 0.20, publisher 0.25
+        OL key:  raw_words 0.50, title 0.15, author(resolved) 0.10, publisher 0.25
+        """
+        score = 0.0
+        book_title_norm = self.normalize(book.title)
+        book_author_norm = self.normalize(book.author)
+        book_publisher_norm = self.normalize(book.publisher)
+
+        # Check if book author is an OL key (not a real name)
+        author_is_ol_key = bool(self._OL_KEY_RE.match(book_author_norm))
+
+        # Check if OL key matches our resolved keys (author name → OL key bridge)
+        ol_key_matched = (resolved_ol_keys and book_author_norm in resolved_ol_keys)
+
+        if author_is_ol_key:
+            if ol_key_matched:
+                # We resolved the author: OL key match acts as author confirmation
+                w_title, w_raw, w_author, w_publisher = 0.15, 0.45, 0.15, 0.25
+            else:
+                w_title, w_raw, w_author, w_publisher = 0.15, 0.55, 0.0, 0.30
+        else:
+            w_title, w_raw, w_author, w_publisher = 0.15, 0.35, 0.20, 0.30
+
+        # --- Title similarity (parsed title - may be inaccurate from OCR) ---
+        if title_norm and book_title_norm:
+            title_sim = SequenceMatcher(None, title_norm, book_title_norm).ratio()
+            score += title_sim * w_title
+
+        # --- Raw words overlap with book title (most reliable signal) ---
+        if raw_words and book_title_norm:
+            book_title_words = set(book_title_norm.split())
+            book_sig_words = {w for w in book_title_words if len(w) >= 3}
+            # Exclude author/publisher words from raw_words for title matching
+            exclude_words = set()
+            if author_norm:
+                exclude_words |= set(author_norm.split())
+            if publisher_norm:
+                exclude_words |= set(publisher_norm.split())
+            raw_title_words = set(raw_words) - exclude_words
+            if book_sig_words and raw_title_words:
+                overlap = len(book_sig_words & raw_title_words)
+                overlap_ratio = overlap / len(book_sig_words)
+                abs_bonus = min(overlap / 3.0, 1.0)
+                combined = overlap_ratio * 0.5 + abs_bonus * 0.5
+                score += combined * w_raw
+
+        # --- Author match ---
+        if w_author > 0:
+            if ol_key_matched:
+                # OL key resolved and matches → full author score
+                score += 1.0 * w_author
+            elif author_norm and book_author_norm:
+                author_sim = SequenceMatcher(None, author_norm, book_author_norm).ratio()
+                score += author_sim * w_author
+            elif publisher_norm and book_author_norm:
+                cross_sim = SequenceMatcher(None, publisher_norm, book_author_norm).ratio()
+                score += cross_sim * (w_author * 0.8)
+
+        # --- Publisher match ---
+        if publisher_norm and book_publisher_norm:
+            pub_sim = SequenceMatcher(None, publisher_norm, book_publisher_norm).ratio()
+            score += pub_sim * w_publisher
+        elif author_norm and book_publisher_norm:
+            cross_sim = SequenceMatcher(None, author_norm, book_publisher_norm).ratio()
+            score += cross_sim * (w_publisher * 0.7)
+
+        return score
 
     # =========================================================================
     # STATS & EXPORT
@@ -949,7 +1359,20 @@ def print_usage():
     print(__doc__)
 
 
+def cleanup_temp_files():
+    """Remove temporary files created by database operations"""
+    temp_files = ['download.log']
+    for f in temp_files:
+        if os.path.exists(f):
+            try:
+                os.remove(f)
+            except Exception:
+                pass
+
+
 def main():
+    cleanup_temp_files()
+
     if len(sys.argv) < 2:
         print_usage()
         db = BookDatabase('books.db')
@@ -990,6 +1413,14 @@ def main():
         if os.path.exists('books.db'):
             size = os.path.getsize('books.db')
             print(f"DB size:    {size / 1024 / 1024:.1f} MB")
+
+    elif cmd == 'create-fts':
+        db = BookDatabase('books.db')
+        print("Building FTS5 full-text search index...")
+        start = datetime.now()
+        db._create_fts_index()
+        elapsed = (datetime.now() - start).total_seconds()
+        print(f"Done in {elapsed:.1f}s")
 
     elif cmd == 'add' and len(sys.argv) >= 4:
         db = BookDatabase('books.db')
@@ -1034,6 +1465,8 @@ def main():
 
     else:
         print_usage()
+
+    cleanup_temp_files()
 
 
 if __name__ == "__main__":
