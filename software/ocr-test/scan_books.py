@@ -8,6 +8,7 @@ Usage:
     python3 scan_books.py --auto             # Auto mode (3s delay between scans)
     python3 scan_books.py --model cpu        # CPU-only (faster, ~6s/book)
     python3 scan_books.py --no-preprocessing # Skip preprocessing
+    python3 scan_books.py --color-filters    # Extra passes with color filters
 
 OCR Models:
     - cpu: CPU-only PP-OCR, multi-pass upscale+raw (~6s/book)
@@ -43,51 +44,7 @@ try:
 except ImportError:
     BOOK_DB_AVAILABLE = False
 
-
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
-
-def load_env_file(env_file='.env'):
-    """Load environment variables from .env file if it exists"""
-    if os.path.exists(env_file):
-        with open(env_file, 'r') as f:
-            for line in f:
-                line = line.strip()
-                # Skip comments and empty lines
-                if line and not line.startswith('#'):
-                    # Parse KEY=VALUE
-                    if '=' in line:
-                        key, value = line.split('=', 1)
-                        key = key.strip()
-                        value = value.strip().strip('"').strip("'")
-                        os.environ[key] = value
-
-
-class RTSPConfig:
-    """RTSP camera configuration"""
-
-    @staticmethod
-    def get_url():
-        """Get RTSP URL with credentials"""
-        # Load .env file if exists
-        load_env_file()
-
-        # Default values
-        ip = "192.168.1.199"
-        port = 554
-        username = "sonoff"
-        password = "gr4jl096"
-        path = "/av_stream/ch0"
-
-        # Read from .env (RTSP_* variables)
-        ip = os.getenv('RTSP_IP', ip)
-        port = int(os.getenv('RTSP_PORT', port))
-        username = os.getenv('RTSP_USERNAME', username)
-        password = os.getenv('RTSP_PASSWORD', password)
-        path = os.getenv('RTSP_PATH', path)
-
-        return f"rtsp://{username}:{password}@{ip}:{port}{path}"
+from config import RTSPConfig
 
 
 # ============================================================================
@@ -121,6 +78,30 @@ class BookCoverPreprocessor:
                               interpolation=cv2.INTER_CUBIC)
         denoised = cv2.fastNlMeansDenoisingColored(upscaled, h=3, hColor=3)
         return denoised
+
+    @staticmethod
+    def generate_color_filters(image):
+        """
+        Generate color-filtered variants to help OCR see through artistic covers.
+        Returns list of (label, 3-channel BGR image) tuples.
+        """
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # Single channels (OpenCV BGR order)
+        blue, green, red = image[:, :, 0], image[:, :, 1], image[:, :, 2]
+
+        def to_bgr(ch):
+            return cv2.cvtColor(ch, cv2.COLOR_GRAY2BGR)
+
+        return [
+            ('grayscale',  to_bgr(gray)),
+            ('inverted',   to_bgr(255 - gray)),
+            ('red',        to_bgr(red)),
+            ('green',      to_bgr(green)),
+            ('blue',       to_bgr(blue)),
+            ('red_inv',    to_bgr(255 - red)),
+            ('green_inv',  to_bgr(255 - green)),
+            ('blue_inv',   to_bgr(255 - blue)),
+        ]
 
 
 
@@ -503,7 +484,7 @@ class BookCoverParser:
 
         return None, text_boxes
 
-    def parse(self, text_boxes: List[TextBox], image_height: int, image_width: int) -> BookInfo:
+    def parse(self, text_boxes: List[TextBox], image_height: int, image_width: int, image=None) -> BookInfo:
         """Parse book cover from detected text boxes"""
         if not text_boxes:
             return BookInfo()
@@ -603,22 +584,50 @@ class BookCoverParser:
                 book.author = author_candidates[0]['text']
                 used_texts.add(book.author)
 
-        # Find title
+        # Find title using vertical proximity grouping.
+        # Step 1: collect core title candidates (multi-word, in title zone)
         title_candidates = []
         for item in scored:
             if item['text'] in used_texts or item['is_quote']:
                 continue
+            if item['text'].upper() in self.publisher_imprints:
+                continue
             if self._is_likely_title(item['text'], item['position_y_ratio']):
                 title_candidates.append(item)
 
-        if title_candidates:
-            title_candidates.sort(key=lambda x: x['position_y'])
-            title_parts = title_candidates[:3]
-            book.title = " ".join(item['text'] for item in title_parts)
-            book.confidence = sum(item['prominence'] for item in title_parts) / len(title_parts) / 10
+        # Step 2: also consider single-word blocks (even small/lowercase)
+        # that are in the extended title zone. Proximity grouping decides membership.
+        for item in scored:
+            if item['text'] in used_texts or item['is_quote']:
+                continue
+            if item in title_candidates:
+                continue
+            if item['text'].upper() in self.publisher_imprints:
+                continue
+            words = item['text'].split()
+            if len(words) == 1 and 0.1 < item['position_y_ratio'] < 0.75:
+                word = words[0]
+                if len(word) >= 2 and any(c.isalpha() for c in word):
+                    title_candidates.append(item)
 
-            for item in title_parts:
+        # Step 3: group by vertical proximity + color, pick best cluster
+        if title_candidates:
+            title_group = self._group_title_blocks(title_candidates, image_height, image)
+
+            # Step 4: extend title group with adjacent blocks that were
+            # already claimed (e.g. publisher grabbed "JANUARY" from title).
+            # If a claimed block is vertically close + color-similar to the
+            # group edges, reclaim it as title.
+            title_group = self._extend_title_group(title_group, scored, used_texts, image_height, image)
+
+            book.title = " ".join(item['text'] for item in title_group)
+            book.confidence = sum(item['prominence'] for item in title_group) / len(title_group) / 10
+
+            for item in title_group:
                 used_texts.add(item['text'])
+                # If this was the publisher, clear it (will re-detect later)
+                if book.publisher and item['text'] == book.publisher:
+                    book.publisher = ""
 
         # Fallback: use most prominent unused text
         if not book.title:
@@ -626,6 +635,16 @@ class BookCoverParser:
                 if item['text'] not in used_texts and not item['is_quote']:
                     book.title = item['text']
                     book.confidence = item['prominence'] / 10
+                    break
+
+        # Re-detect publisher if it was reclaimed by title
+        if not book.publisher:
+            for item in scored:
+                if item['text'] in used_texts or item['is_quote']:
+                    continue
+                if self._is_likely_publisher(item['text'], item['position_y_ratio']):
+                    book.publisher = item['text']
+                    used_texts.add(item['text'])
                     break
 
         # Resolve imprints to actual publishers
@@ -774,6 +793,145 @@ class BookCoverParser:
                 return True
 
         return False
+
+    @staticmethod
+    def _mean_color_at_bbox(image, bbox):
+        """Get mean BGR color of the text region in the original image"""
+        x1, y1, x2, y2 = [int(v) for v in bbox]
+        h, w = image.shape[:2]
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
+        if x2 <= x1 or y2 <= y1:
+            return np.array([128, 128, 128], dtype=float)
+        roi = image[y1:y2, x1:x2]
+        return roi.mean(axis=(0, 1))
+
+    def _group_title_blocks(self, candidates: list, img_height: int, image=None) -> list:
+        """
+        Group title candidates by vertical proximity and (optionally) color similarity.
+        Returns the best cluster sorted by Y position.
+
+        Criteria for same group:
+        - Vertical gap between consecutive lines <= 1.5x the average line height
+        - If image is available: mean text color distance < threshold
+        """
+        if len(candidates) <= 1:
+            return candidates
+
+        # Sort by vertical position
+        candidates = sorted(candidates, key=lambda x: x['position_y'])
+
+        # Extract color info if image available
+        colors = {}
+        if image is not None:
+            for item in candidates:
+                colors[id(item)] = self._mean_color_at_bbox(image, item['box'].bbox)
+
+        # Build adjacency: consecutive blocks that are vertically close + color-similar
+        groups = [[candidates[0]]]
+        for item in candidates[1:]:
+            prev = groups[-1][-1]
+            prev_box = prev['box']
+            curr_box = item['box']
+
+            # Vertical gap: distance from bottom of previous to top of current
+            prev_bottom = prev_box.bbox[3]
+            curr_top = curr_box.bbox[1]
+            gap = curr_top - prev_bottom
+
+            # Average line height of the two blocks
+            prev_h = prev_box.bbox[3] - prev_box.bbox[1]
+            curr_h = curr_box.bbox[3] - curr_box.bbox[1]
+            avg_h = (prev_h + curr_h) / 2
+
+            # Close vertically: gap < 1.5x avg line height (allow some spacing)
+            # Also allow overlapping lines (gap < 0)
+            vertically_close = gap < avg_h * 1.5
+
+            # Color similarity check (if image available)
+            color_similar = True
+            if image is not None and id(prev) in colors and id(item) in colors:
+                dist = np.linalg.norm(colors[id(prev)] - colors[id(item)])
+                # Threshold: ~60 in BGR space (fairly permissive)
+                color_similar = dist < 60
+
+            if vertically_close and color_similar:
+                groups[-1].append(item)
+            else:
+                groups.append([item])
+
+        # Pick the best group: highest total prominence
+        best_group = max(groups, key=lambda g: sum(item['prominence'] for item in g))
+
+        if self.debug:
+            print(f"\n  Title grouping: {len(groups)} group(s), best has {len(best_group)} block(s)")
+            for item in best_group:
+                color_info = ""
+                if id(item) in colors:
+                    c = colors[id(item)]
+                    color_info = f" color=({c[2]:.0f},{c[1]:.0f},{c[0]:.0f})"
+                print(f"    [{item['position_y_ratio']:.2f}] \"{item['text']}\"{color_info}")
+
+        return best_group
+
+    def _extend_title_group(self, title_group: list, all_scored: list,
+                            used_texts: set, img_height: int, image=None) -> list:
+        """
+        Extend title group by pulling in adjacent blocks that are vertically
+        close and color-similar, even if already claimed (e.g. as publisher).
+        Searches above and below the current group edges.
+        """
+        if not title_group:
+            return title_group
+
+        group = list(title_group)
+        changed = True
+        while changed:
+            changed = False
+            top_item = min(group, key=lambda x: x['position_y'])
+            bot_item = max(group, key=lambda x: x['position_y'])
+            top_box = top_item['box']
+            bot_box = bot_item['box']
+            avg_h = sum(it['box'].bbox[3] - it['box'].bbox[1] for it in group) / len(group)
+
+            for item in all_scored:
+                if item in group or item['is_quote']:
+                    continue
+                # Skip known imprints (OSCAR, BUR, etc.)
+                if item['text'].upper() in self.publisher_imprints:
+                    continue
+                curr_box = item['box']
+
+                # Check adjacency above the group top
+                gap_above = top_box.bbox[1] - curr_box.bbox[3]
+                # Check adjacency below the group bottom
+                gap_below = curr_box.bbox[1] - bot_box.bbox[3]
+
+                vertically_adjacent = (0 <= gap_above < avg_h * 1.5) or \
+                                      (0 <= gap_below < avg_h * 1.5) or \
+                                      (-avg_h * 0.3 < gap_above < 0) or \
+                                      (-avg_h * 0.3 < gap_below < 0)
+
+                if not vertically_adjacent:
+                    continue
+
+                # Color similarity with nearest edge
+                color_ok = True
+                if image is not None:
+                    neighbor = top_item if gap_above >= 0 else bot_item
+                    c1 = self._mean_color_at_bbox(image, neighbor['box'].bbox)
+                    c2 = self._mean_color_at_bbox(image, curr_box.bbox)
+                    color_ok = np.linalg.norm(c1 - c2) < 60
+
+                if color_ok:
+                    group.append(item)
+                    changed = True
+                    if self.debug:
+                        print(f"    + extended title: \"{item['text']}\" (gap_above={gap_above:.0f} gap_below={gap_below:.0f})")
+
+        # Re-sort by vertical position
+        group.sort(key=lambda x: x['position_y'])
+        return group
 
     def _is_likely_author(self, text: str, position_y_ratio: float) -> bool:
         """Check if text is likely an author name"""
@@ -1328,19 +1486,19 @@ def _run_metis_det_and_rec(image_path):
         return None
 
 
-def _merge_ensemble_results(boxes_cpu, boxes_metis):
-    """Merge CPU and Metis results, picking highest confidence per text line"""
-    if not boxes_metis:
-        return boxes_cpu
-    if not boxes_cpu:
-        return boxes_metis
-
-    # Combine all boxes
+def _merge_ensemble_results(*box_lists):
+    """Merge multiple OCR results, picking highest confidence per text line"""
+    # Flatten all non-empty lists
     all_boxes = []
-    for b in boxes_cpu:
-        all_boxes.append(('cpu', b))
-    for b in boxes_metis:
-        all_boxes.append(('metis', b))
+    for blist in box_lists:
+        if blist:
+            for b in blist:
+                all_boxes.append(('src', b))
+
+    if not all_boxes:
+        return []
+    if len(all_boxes) == 1:
+        return [all_boxes[0][1]]
 
     # Sort by y-center position
     all_boxes.sort(key=lambda x: (x[1].bbox[1] + x[1].bbox[3]) / 2)
@@ -1414,12 +1572,13 @@ def run_ocr_ppocr_metis(image_path):
 class ContinuousScanner:
     """Continuous book OCR scanner"""
 
-    def __init__(self, model='hybrid', auto_mode=False, preprocessing=True, debug=False, lang=None):
+    def __init__(self, model='hybrid', auto_mode=False, preprocessing=True, debug=False, lang=None, color_filters=False):
         self.model = model
         self.auto_mode = auto_mode
         self.preprocessing = preprocessing
         self.debug = debug
         self.lang = lang
+        self.color_filters = color_filters
         self.book_count = 0
         self.session_start = datetime.now()
 
@@ -1751,46 +1910,68 @@ class ContinuousScanner:
         Multi-pass OCR: different preprocessings capture different text types.
         Pass 1: Upscale 2x + light denoise → small text (publisher, subtitle)
         Pass 2: Raw original image → large artistic text (title)
+        Optional: Color filter passes (--color-filters) → text hidden by artistic colors
         Merge by picking highest confidence per text line.
         """
+        all_pass_boxes = []
+        temp_files = []
         scale = 2.0
+        total_passes = 2 + (8 if self.color_filters else 0)
 
         # Pass 1: Upscale + denoise
-        print(f"   └─ Pass 1: Upscale {scale:.0f}x + denoise...", end='', flush=True)
+        print(f"   └─ Pass 1/{total_passes}: Upscale {scale:.0f}x + denoise...", end='', flush=True)
         upscaled = self.preprocessor.preprocess_for_ppocr_upscale(image, scale)
         temp_up = '/tmp/ocr_pass_upscale.jpg'
         cv2.imwrite(temp_up, upscaled)
+        temp_files.append(temp_up)
         if self.debug:
             cv2.imwrite('test_images/debug_upscaled_last.jpg', upscaled)
-        print(" ✅")
+        print(" done")
 
-        print(f"   └─ Pass 1: OCR...", end='', flush=True)
+        print(f"   └─ Pass 1/{total_passes}: OCR...", end='', flush=True)
         boxes_upscale = ocr_func(temp_up)
-        # Scale bboxes back to original image coordinates
         boxes_upscale = [
             TextBox(b.text,
                     (b.bbox[0]/scale, b.bbox[1]/scale, b.bbox[2]/scale, b.bbox[3]/scale),
                     b.confidence)
             for b in boxes_upscale
         ]
-        print(f" ✅ ({len(boxes_upscale)} blocks)")
+        all_pass_boxes.append(boxes_upscale)
+        print(f" done ({len(boxes_upscale)} blocks)")
 
         # Pass 2: Raw image
-        print(f"   └─ Pass 2: Raw image OCR...", end='', flush=True)
+        print(f"   └─ Pass 2/{total_passes}: Raw image OCR...", end='', flush=True)
         temp_raw = '/tmp/ocr_pass_raw.jpg'
         cv2.imwrite(temp_raw, image)
+        temp_files.append(temp_raw)
         boxes_raw = ocr_func(temp_raw)
-        print(f" ✅ ({len(boxes_raw)} blocks)")
+        all_pass_boxes.append(boxes_raw)
+        print(f" done ({len(boxes_raw)} blocks)")
 
-        # Merge: pick best confidence per text line
-        merged = _merge_ensemble_results(boxes_upscale, boxes_raw)
-        print(f"   └─ Merged: {len(merged)} blocks (from {len(boxes_upscale)} upscale + {len(boxes_raw)} raw)")
+        # Color filter passes (optional)
+        if self.color_filters:
+            filters = self.preprocessor.generate_color_filters(image)
+            for i, (label, filtered) in enumerate(filters, start=3):
+                print(f"   └─ Pass {i}/{total_passes}: {label}...", end='', flush=True)
+                temp_f = f'/tmp/ocr_pass_{label}.jpg'
+                cv2.imwrite(temp_f, filtered)
+                temp_files.append(temp_f)
+                if self.debug:
+                    cv2.imwrite(f'test_images/debug_filter_{label}.jpg', filtered)
+                boxes_f = ocr_func(temp_f)
+                all_pass_boxes.append(boxes_f)
+                print(f" done ({len(boxes_f)} blocks)")
+
+        # Merge all passes: pick best confidence per text line
+        merged = _merge_ensemble_results(*all_pass_boxes)
+        total_input = sum(len(b) for b in all_pass_boxes)
+        print(f"   └─ Merged: {len(merged)} blocks (from {total_input} total across {len(all_pass_boxes)} passes)")
 
         # Cleanup temp files
-        for f in [temp_up, temp_raw]:
+        for f in temp_files:
             try:
                 os.remove(f)
-            except Exception:
+            except OSError:
                 pass
 
         return merged
@@ -1841,7 +2022,7 @@ class ContinuousScanner:
         # Parse
         print(f"🧠 [4/6] Parsing book information...", end='', flush=True)
         img_h, img_w = image.shape[:2]
-        book_info = self.parser.parse(corrected_text_boxes, img_h, img_w)
+        book_info = self.parser.parse(corrected_text_boxes, img_h, img_w, image=image)
 
         # Convert to dict for postprocessing
         book_dict = {
@@ -1859,67 +2040,82 @@ class ContinuousScanner:
         return improved
 
     def display_result(self, book_info, show_raw=True, db_result=None):
-        """Display OCR result"""
+        """Display OCR result: best identification on top, debug details below"""
+        MIN_DB_CONFIDENCE = 0.60
+
+        # Determine best result to show in the main box
+        db_matched = (db_result and db_result.get('matched') and db_result.get('book'))
+        db_confident = db_matched and db_result['match_confidence'] >= MIN_DB_CONFIDENCE
+
         print("\n" + "="*70)
         print(f"   📚 BOOK #{self.book_count}")
         print("="*70)
-        print(f"Title:      {book_info['title']}")
-        print(f"Author:     {book_info['author']}")
-        print(f"Publisher:  {book_info['publisher']}")
-        print(f"Confidence: {book_info['confidence']:.2f}")
-        print("="*70)
 
-        # Database identification result
-        MIN_DB_CONFIDENCE = 0.60  # Below this, DB match is unreliable
-        if db_result and db_result.get('matched') and db_result.get('book'):
+        if db_confident:
+            # Best case: DB match with high confidence
             book = db_result['book']
             confidence_pct = int(db_result['match_confidence'] * 100)
-
-            if db_result['match_confidence'] >= MIN_DB_CONFIDENCE:
-                print(f"\n   📖 BOOK IDENTIFIED ({confidence_pct}% match)")
-                print("-" * 70)
-                print(f"  Title:     {book.title}")
-                print(f"  Author:    {book.author}")
-                if book.publisher:
-                    print(f"  Publisher: {book.publisher}")
-                if book.isbn:
-                    print(f"  ISBN:      {book.isbn}")
-                if book.year:
-                    print(f"  Year:      {book.year}")
-                if book.language:
-                    lang_names = {'en': 'English', 'it': 'Italiano', 'fr': 'Français',
-                                  'es': 'Español', 'de': 'Deutsch'}
-                    print(f"  Language:  {lang_names.get(book.language, book.language)}")
-                print("-" * 70)
+            print(f"  Title:      {book.title}")
+            print(f"  Author:     {book.author}")
+            if book.publisher:
+                print(f"  Publisher:  {book.publisher}")
+            if book.isbn:
+                print(f"  ISBN:       {book.isbn}")
+            if book.year:
+                print(f"  Year:       {book.year}")
+            if book.language:
+                lang_names = {'en': 'English', 'it': 'Italiano', 'fr': 'Français',
+                              'es': 'Español', 'de': 'Deutsch'}
+                print(f"  Language:   {lang_names.get(book.language, book.language)}")
+            print(f"  Match:      {confidence_pct}%")
+        else:
+            # No DB match or low confidence: show OCR result
+            print(f"  Title:      {book_info['title']}")
+            print(f"  Author:     {book_info['author']}")
+            print(f"  Publisher:  {book_info['publisher']}")
+            if db_matched:
+                print(f"  Match:      {int(db_result['match_confidence'] * 100)}% (uncertain)")
             else:
-                print(f"\n   ⚠️  UNCERTAIN MATCH ({confidence_pct}% - below {int(MIN_DB_CONFIDENCE*100)}% threshold)")
-                print("-" * 70)
-                print(f"  OCR data:   {book_info['title']} - {book_info['author']} ({book_info['publisher']})")
-                print(f"  Candidate:  {book.title} - {book.author}")
-                print("-" * 70)
+                print(f"  Match:      not found in DB")
 
-            # Show alternatives
+        print("="*70)
+
+        # Debug section: OCR data, DB search, reasoning
+        print(f"\n  Details:")
+        print(f"  ├─ OCR read:    {book_info['title']} / {book_info['author']} / {book_info['publisher']}")
+
+        if db_matched:
+            book = db_result['book']
+            confidence_pct = int(db_result['match_confidence'] * 100)
+            if db_confident:
+                print(f"  ├─ DB match:    {book.title} - {book.author} ({confidence_pct}%)")
+                print(f"  └─ Result:      DB match used (>= {int(MIN_DB_CONFIDENCE*100)}% threshold)")
+            else:
+                print(f"  ├─ DB candidate: {book.title} - {book.author} ({confidence_pct}%)")
+                print(f"  └─ Result:      OCR data used (DB match below {int(MIN_DB_CONFIDENCE*100)}% threshold)")
+        else:
+            print(f"  ├─ DB match:    none")
+            print(f"  └─ Result:      OCR data used (no DB match)")
+
+        # Alternatives
+        if db_matched:
             alternatives = db_result.get('alternatives', [])
             if alternatives:
-                print("  Possible alternatives:")
+                print(f"\n  Alternatives:")
                 for alt_book, alt_score in alternatives:
                     alt_pct = int(alt_score * 100)
                     pub_info = f" ({alt_book.publisher})" if alt_book.publisher else ""
                     print(f"    [{alt_pct}%] {alt_book.title} - {alt_book.author}{pub_info}")
-                print("-" * 70)
-        elif db_result is not None:
-            print("\n   📖 Book not found in database")
 
+        # Raw OCR text blocks
         if show_raw and 'raw_text' in book_info:
-            print("\n📝 All detected text blocks:")
-            print("-" * 70)
+            print(f"\n  Raw OCR blocks:")
             raw_lines = book_info['raw_text'].split('\n') if book_info['raw_text'] else []
             for i, line in enumerate(raw_lines[:10], 1):
                 if line.strip():
-                    print(f"  {i}. {line.strip()}")
+                    print(f"    {i}. {line.strip()}")
             if len(raw_lines) > 10:
-                print(f"  ... and {len(raw_lines) - 10} more")
-            print("-" * 70)
+                print(f"    ... and {len(raw_lines) - 10} more")
 
     def show_stats(self):
         """Show session statistics"""
@@ -1940,7 +2136,8 @@ class ContinuousScanner:
         print("="*70)
         print("   📚 CONTINUOUS BOOK SCANNER")
         print("="*70)
-        print(f"Model:         {self.model}")
+        model_label = 'hybrid (cpu + metis)' if self.model == 'hybrid' else self.model
+        print(f"Model:         {model_label}")
         print(f"Preprocessing: {'Enabled' if self.preprocessing else 'Disabled'}")
         lang_display = {'en': 'English', 'it': 'Italian'}.get(self.lang, 'All')
         print(f"DB language:   {lang_display}")
@@ -2067,6 +2264,7 @@ Examples:
   python3 scan_books.py --model cpu             # CPU-only
   python3 scan_books.py --model metis          # Metis accelerator only
   python3 scan_books.py --no-preprocessing     # Skip multi-pass, single raw pass
+  python3 scan_books.py --color-filters        # 10 passes: upscale + raw + 8 color filters
         """
     )
     parser.add_argument(
@@ -2092,6 +2290,11 @@ Examples:
         help="Filter DB search by language (default: all languages)"
     )
     parser.add_argument(
+        '--color-filters',
+        action='store_true',
+        help="Extra OCR passes with color filters (grayscale, inverted, R/G/B channels)"
+    )
+    parser.add_argument(
         '--debug',
         action='store_true',
         help="Enable debug mode (save intermediate images)"
@@ -2104,7 +2307,8 @@ Examples:
         auto_mode=args.auto,
         preprocessing=not args.no_preprocessing,
         debug=args.debug,
-        lang=args.lang
+        lang=args.lang,
+        color_filters=args.color_filters
     )
 
     scanner.run()
