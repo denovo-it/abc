@@ -14,14 +14,18 @@ import os
 # Suppress fontconfig warnings
 os.environ['QT_LOGGING_RULES'] = '*.debug=false;qt.qpa.*=false'
 
+import argparse
+import glob
+import subprocess
+import sys
+import warnings
+
 import cv2
 import numpy as np
-import sys
-import argparse
-import subprocess
+
+from config import RTSPConfig
 
 # Suppress OpenCV warnings
-import warnings
 warnings.filterwarnings('ignore', category=UserWarning)
 
 
@@ -52,103 +56,53 @@ def can_show_gui():
             result = subprocess.run(['which', viewer], capture_output=True)
             if result.returncode == 0:
                 return True
-        except:
+        except OSError:
             pass
     return False
 
 
-def show_image(title, image, wait_key=True):
+def show_image(image, wait_key=True):
     """
     Show image using external viewer (OpenCV GUI not available in venv).
 
     Returns:
         True if image was shown, False otherwise
     """
+    temp_path = '/tmp/calibration_preview_temp.jpg'
     try:
-        # Save to temp file
-        temp_path = '/tmp/calibration_preview_temp.jpg'
         cv2.imwrite(temp_path, image)
-
-        # Try to open with available viewer
-        viewers = ['feh', 'eog', 'gpicview', 'viewnior', 'xdg-open']
-        opened = False
-
-        proc = None
-        for viewer in viewers:
-            try:
-                result = subprocess.run(['which', viewer], capture_output=True)
-                if result.returncode == 0:
-                    proc = subprocess.Popen(
-                        [viewer, temp_path],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL
-                    )
-                    opened = True
-                    break
-            except:
-                continue
-
-        if opened and wait_key:
-            print("")
-            print("Preview opened in external viewer.")
-            input("Press ENTER to close preview and continue...")
-            # Kill the viewer process
-            try:
-                proc.terminate()
-                proc.wait(timeout=3)
-            except Exception:
-                pass
-
-        return opened
     except Exception as e:
-        print("Cannot show preview: " + str(e))
+        print(f"Cannot save preview: {e}")
         return False
 
+    viewers = ['feh', 'eog', 'gpicview', 'viewnior', 'xdg-open']
+    proc = None
+    for viewer in viewers:
+        try:
+            result = subprocess.run(['which', viewer], capture_output=True)
+            if result.returncode == 0:
+                proc = subprocess.Popen(
+                    [viewer, temp_path],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                break
+        except OSError:
+            continue
 
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
+    if proc is None:
+        return False
 
-def load_env_file(env_file='.env'):
-    """Load environment variables from .env file if it exists"""
-    if os.path.exists(env_file):
-        with open(env_file, 'r') as f:
-            for line in f:
-                line = line.strip()
-                # Skip comments and empty lines
-                if line and not line.startswith('#'):
-                    # Parse KEY=VALUE
-                    if '=' in line:
-                        key, value = line.split('=', 1)
-                        key = key.strip()
-                        value = value.strip().strip('"').strip("'")
-                        os.environ[key] = value
+    if wait_key:
+        print("\nPreview opened in external viewer.")
+        input("Press ENTER to close preview and continue...")
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+        except Exception:
+            pass
 
-
-class RTSPConfig:
-    """RTSP camera configuration"""
-
-    @staticmethod
-    def get_url():
-        """Get RTSP URL with credentials"""
-        # Load .env file if exists
-        load_env_file()
-
-        # Default camera settings
-        ip = "192.168.1.199"
-        port = 554
-        username = "sonoff"
-        password = "gr4jl096"
-        path = "/av_stream/ch0"
-
-        # Read from .env (RTSP_* variables)
-        ip = os.getenv('RTSP_IP', ip)
-        port = int(os.getenv('RTSP_PORT', port))
-        username = os.getenv('RTSP_USERNAME', username)
-        password = os.getenv('RTSP_PASSWORD', password)
-        path = os.getenv('RTSP_PATH', path)
-
-        return f"rtsp://{username}:{password}@{ip}:{port}{path}"
+    return True
 
 
 # ============================================================================
@@ -424,7 +378,7 @@ def calibrate_camera(rtsp_url, debug=False, show_gui=False):
             new_w = int(display_img.shape[1] * scale)
             display_img = cv2.resize(display_img, (new_w, max_display_h))
 
-        show_image("Calibration Preview", display_img)
+        show_image(display_img)
 
     return rectangle
 
@@ -446,15 +400,11 @@ def save_calibration(rectangle):
 
 def cleanup_temp_files():
     """Remove temporary files created by calibration"""
-    import glob
-    temp_files = ['/tmp/calibration_preview_temp.jpg']
-    temp_files.extend(glob.glob('debug_*.jpg'))
-    for f in temp_files:
-        if os.path.exists(f):
-            try:
-                os.remove(f)
-            except Exception:
-                pass
+    for f in ['/tmp/calibration_preview_temp.jpg'] + glob.glob('debug_*.jpg'):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
 
 
 def main():
