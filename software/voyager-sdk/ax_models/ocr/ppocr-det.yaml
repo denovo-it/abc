@@ -28,7 +28,7 @@ models:
     input_tensor_layout: NCHW
     input_tensor_shape: [1, 3, 640, 640]
     input_color_format: RGB
-    weight_path: $AXELERA_FRAMEWORK/../ocr-test/models/PP-OCRv3_det_fixed_640.onnx
+    weight_path: $AXELERA_FRAMEWORK/../ocr-module/models/PP-OCRv3_det_fixed_640.onnx
     num_classes: 1
     dataset: TextDetDataset
 

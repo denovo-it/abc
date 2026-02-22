@@ -13,11 +13,11 @@ Requires:
   - Pose model compiled for feedback (optional with --no-feedback)
 
 Usage:
-  cd software/pipeline
+  cd software
   source venv/bin/activate
-  python pipeline.py --no-feedback         # Skip gesture phase
-  python pipeline.py                       # Full pipeline with gesture feedback
-  python pipeline.py --ocr-model hybrid    # Use hybrid OCR (cpu+metis ensemble)
+  python app.py --no-feedback         # Skip gesture phase
+  python app.py                       # Full pipeline with gesture feedback
+  python app.py --ocr-model hybrid    # Use hybrid OCR (cpu+metis ensemble)
 """
 
 import argparse
@@ -49,8 +49,8 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, '..'))
-_OCR_DIR = os.path.join(_PROJECT_ROOT, 'ocr-test')
+_PROJECT_ROOT = _SCRIPT_DIR  # pipeline.py lives at software/ level
+_OCR_DIR = os.path.join(_PROJECT_ROOT, 'ocr-module')
 _SDK_DIR = os.path.join(_PROJECT_ROOT, 'voyager-sdk')
 
 # ---------------------------------------------------------------------------
@@ -60,20 +60,14 @@ _SDK_DIR = os.path.join(_PROJECT_ROOT, 'voyager-sdk')
 
 def _load_env(path):
     """Load KEY=VALUE pairs from a .env file into os.environ."""
-    if not os.path.exists(path):
-        return
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if line and not line.startswith('#') and '=' in line:
-                key, value = line.split('=', 1)
-                os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+    from config import load_env_file
+    load_env_file(path)
 
 
 def _bootstrap_axelera_env():
     """Set Axelera SDK environment variables programmatically.
 
-    Equivalent to sourcing object-recognition/venv/bin/activate lines 91-123.
+    Equivalent to sourcing object-recognition-module/venv/bin/activate lines 91-123.
     Must be called before any axelera imports.
     """
     if os.environ.get('AXELERA_FRAMEWORK'):
@@ -116,13 +110,13 @@ def _bootstrap_axelera_env():
             sys.path.insert(0, p)
 
 
+# Add ocr-module to sys.path FIRST (needed by _load_env -> config)
+if _OCR_DIR not in sys.path:
+    sys.path.insert(0, _OCR_DIR)
+
 # Load .env and bootstrap SDK environment BEFORE any axelera imports
 _load_env(os.path.join(_SCRIPT_DIR, '.env'))
 _bootstrap_axelera_env()
-
-# Add ocr-test to sys.path for imports
-if _OCR_DIR not in sys.path:
-    sys.path.insert(0, _OCR_DIR)
 
 # Now safe to import axelera and OCR modules
 from axelera.app import config as ax_config  # noqa: E402
@@ -150,12 +144,8 @@ KP_RIGHT_WRIST = 10
 
 def _rtsp_url():
     """Build RTSP URL from environment variables."""
-    ip = os.getenv('RTSP_IP', '192.168.1.199')
-    port = os.getenv('RTSP_PORT', '554')
-    username = os.getenv('RTSP_USERNAME', 'sonoff')
-    password = os.getenv('RTSP_PASSWORD', '')
-    path = os.getenv('RTSP_PATH', '/av_stream/ch0')
-    return f"rtsp://{username}:{password}@{ip}:{port}{path}"
+    from config import RTSPConfig
+    return RTSPConfig.get_url()
 
 
 def _rtsp_url_safe(url):
@@ -304,14 +294,14 @@ _ocr_components = None
 
 
 def _init_ocr_components(ocr_model, debug=False):
-    """Import and initialize OCR components from ocr-test module."""
+    """Import and initialize OCR components from ocr-module."""
     global _ocr_components
     if _ocr_components is not None:
         return _ocr_components
 
     print("  Loading OCR components...")
 
-    # Import from ocr-test
+    # Import from ocr-module
     from scan_books import (
         BookCoverPreprocessor,
         BookCoverParser,
@@ -504,19 +494,6 @@ def _fuzzy_correct_with_databases(text, parser):
     return ' '.join(corrected_words)
 
 
-# Stopwords for identify_book (combined EN+IT)
-_STOPWORDS = {
-    'the', 'a', 'an', 'of', 'and', 'in', 'on', 'at', 'to', 'for', 'is', 'it',
-    'by', 'with', 'from', 'or', 'not', 'but', 'was', 'are', 'be', 'has', 'had',
-    'that', 'this', 'his', 'her', 'its', 'all', 'can', 'new', 'one', 'two',
-    'il', 'lo', 'la', 'le', 'gli', 'un', 'uno', 'una', 'di', 'da', 'del',
-    'dei', 'della', 'delle', 'degli', 'dal', 'dalla', 'dai', 'dalle',
-    'nel', 'nella', 'nei', 'nelle', 'sul', 'sulla', 'sui', 'sulle',
-    'con', 'per', 'tra', 'fra', 'che', 'non', 'sono', 'come', 'anche',
-    'più', 'piu', 'suo', 'sua', 'suoi', 'mio', 'mia',
-}
-
-
 def _identify_book(book_info, parser, lang=None):
     """Identify book from OCR results using database.
 
@@ -526,12 +503,14 @@ def _identify_book(book_info, parser, lang=None):
         return {'matched': False, 'book': None, 'match_confidence': 0.0,
                 'alternatives': []}
 
+    from scan_books import ContinuousScanner
+
     raw_text = book_info.get('raw_text', '')
     title = book_info.get('title', '')
     author = book_info.get('author', '')
     publisher = book_info.get('publisher', '')
 
-    exclude_words = set(_STOPWORDS)
+    exclude_words = set(ContinuousScanner.STOPWORDS)
     for imprint in parser.publisher_imprints:
         for w in imprint.lower().split():
             if len(w) >= 3:
@@ -1032,8 +1011,8 @@ def main():
         description='A.B.C. Pipeline - Integrated book detection, OCR, and feedback'
     )
     parser.add_argument(
-        '--ocr-model', choices=['cpu', 'metis', 'hybrid'], default='cpu',
-        help='OCR model (default: cpu, avoids Metis contention with detection)')
+        '--ocr-model', choices=['cpu', 'metis', 'hybrid'], default='hybrid',
+        help='OCR model (default: hybrid, CPU+Metis ensemble)')
     parser.add_argument(
         '--lang', choices=['en', 'it'], default=None,
         help='Language filter for DB search')

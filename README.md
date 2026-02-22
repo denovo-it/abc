@@ -37,7 +37,7 @@ abc/
   electronics/           # Hardware setup and specifications
   mechanical/            # Mechanical design (3D printed support)
   software/
-    ocr-test/            # OCR scanning and book identification
+    ocr-module/            # OCR scanning and book identification
       scan_books.py      # Main scanner with OCR pipeline
       setup_database.py  # Database management and Open Library import
       calibrate.py       # Camera calibration (X marker detection)
@@ -50,7 +50,7 @@ abc/
 ## Quick Start
 
 ```bash
-cd software/ocr-test
+cd software/ocr-module
 source venv/bin/activate
 
 # Calibrate loading area (one-time)
@@ -63,7 +63,7 @@ python3 scan_books.py
 python3 scan_books.py --model cpu
 ```
 
-See [software/ocr-test/doc/README.md](software/ocr-test/doc/README.md) for
+See [software/ocr-module/doc/README.md](software/ocr-module/doc/README.md) for
 detailed usage, OCR models, and troubleshooting.
 
 ---

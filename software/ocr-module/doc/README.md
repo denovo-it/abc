@@ -154,7 +154,7 @@ During manual scanning:
 ## File Structure
 
 ```
-ocr-test/
+ocr-module/
   calibrate.py          # Camera calibration (X marker detection)
   scan_books.py         # Main scanner with OCR pipeline
   setup_database.py     # Database management and Open Library import

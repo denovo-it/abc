@@ -6,10 +6,10 @@
 **/__pycache__/
 
 # OCR Test
-software/ocr-test/models/*.tar
-software/ocr-test/test_images/*.jpg
-software/ocr-test/test_images/*.png
-!software/ocr-test/test_images/.gitkeep
-software/ocr-test/debug_*.jpg
-software/ocr-test/ocr_results.csv
+software/ocr-module/models/*.tar
+software/ocr-module/test_images/*.jpg
+software/ocr-module/test_images/*.png
+!software/ocr-module/test_images/.gitkeep
+software/ocr-module/debug_*.jpg
+software/ocr-module/ocr_results.csv
 
