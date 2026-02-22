@@ -1,46 +1,4 @@
-# OCR Book Cataloguing System
-
-**System:** Orange Pi 5 Plus + Axelera Metis AI Accelerator
-**OCR Engine:** PaddleOCR v3 (Latin)
-**Database:** Open Library (55M+ books)
-
----
-
-## Overview
-
-Automatic book scanning and cataloguing via cover OCR. The system captures
-book covers from an RTSP camera, runs multi-pass OCR with optional hardware
-acceleration, then identifies books against a local database of 55M+ titles.
-
-**Key features:**
-- Multi-pass OCR (upscale 2x + raw image, merged by confidence)
-- Three OCR modes: CPU, Metis accelerator, Hybrid ensemble
-- Database identification with cascading search and fuzzy matching
-- Language filtering (English, Italian, or all)
-- RTSP camera with automatic buffer flush
-
----
-
-## Quick Start
-
-```bash
-cd /home/orangepi/abc/software/ocr-test
-source venv/bin/activate
-
-# Calibrate loading area (one-time)
-python3 calibrate.py
-
-# Scan books (default: hybrid mode, all languages)
-python3 scan_books.py
-
-# Scan with language filter
-python3 scan_books.py --lang it
-
-# CPU-only mode (faster, no Metis needed)
-python3 scan_books.py --model cpu
-```
-
----
+# OCR Software Documentation
 
 ## OCR Models
 
@@ -92,20 +50,7 @@ python3 scan_books.py               # All languages (default)
 
 ---
 
-## Book Data Source
-
-The book database is built from **Open Library** (https://openlibrary.org),
-a project of the Internet Archive.
-
-- **Data:** Open Library Editions Dump (~12GB compressed, ~55M book records)
-- **License:** Open Database License (ODbL) v1.0
-- **Content:** Title, author, publisher, ISBN, year, language for each edition
-- **Usage:** This is public data, freely available for download and use
-
-The data is entirely factual/bibliographic (not copyrighted text) and is
-explicitly provided under an open license for any use.
-
-### Building the Database
+## Building the Database
 
 ```bash
 # Download Open Library dump (~12GB, takes a while)
