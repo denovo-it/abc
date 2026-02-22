@@ -4,15 +4,15 @@ Continuous book scanning with OCR.
 Processes one book after another with automatic preprocessing and postprocessing.
 
 Usage:
-    python3 scan_books.py                    # Manual mode (press ENTER for each book)
+    python3 scan_books.py                    # Manual mode, default hybrid
     python3 scan_books.py --auto             # Auto mode (3s delay between scans)
-    python3 scan_books.py --model tesseract  # Use specific OCR model
+    python3 scan_books.py --model cpu        # CPU-only (faster, ~6s/book)
     python3 scan_books.py --no-preprocessing # Skip preprocessing
 
 OCR Models:
-    - tesseract: Fast, good for clean images (~8s/book)
-    - ppocr: Very fast, Latin/Italian support (~2.5s/book) [DEFAULT]
-    - ppocr-metis: Ensemble CPU+Metis accelerator (~3.5s/book, best quality)
+    - cpu: CPU-only PP-OCR, multi-pass upscale+raw (~6s/book)
+    - metis: Metis accelerator detection + CPU recognition (~4s/book)
+    - hybrid: Ensemble CPU+Metis, merge best results (~8s/book) [DEFAULT]
 
 Database-Enhanced Parsing:
     - 18,500+ known authors for accurate detection
@@ -102,33 +102,6 @@ class BookCoverPreprocessor:
 
     def __init__(self, debug=False):
         self.debug = debug
-
-    def preprocess_for_tesseract(self, image):
-        """Preprocess for Tesseract OCR (needs high contrast binary)"""
-        # Convert to grayscale
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
-
-        # Denoise
-        denoised = cv2.bilateralFilter(gray, 9, 75, 75)
-
-        # CLAHE for contrast
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(denoised)
-
-        # Morphological gradient to enhance text edges
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        gradient = cv2.morphologyEx(enhanced, cv2.MORPH_GRADIENT, kernel)
-
-        # Adaptive thresholding
-        binary = cv2.adaptiveThreshold(
-            enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
-        )
-
-        # Morphological cleanup
-        kernel_clean = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-        cleaned = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel_clean)
-
-        return cleaned
 
     def preprocess_for_ppocr(self, image):
         """Preprocess for PP-OCR (keeps color - PP-OCR expects RGB input)"""
@@ -1052,30 +1025,6 @@ class BookCoverParser:
 # OCR EXECUTION
 # ============================================================================
 
-def run_ocr_tesseract(image_path):
-    """Run Tesseract OCR on image"""
-    try:
-        import pytesseract
-        from PIL import Image
-    except ImportError:
-        print("❌ Tesseract not installed. Install with: pip install pytesseract pillow")
-        sys.exit(1)
-
-    img = Image.open(image_path)
-    data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
-
-    text_boxes = []
-    for i in range(len(data['text'])):
-        if int(data['conf'][i]) > 0:
-            text = data['text'][i].strip()
-            if text:
-                x, y, w, h = data['left'][i], data['top'][i], data['width'][i], data['height'][i]
-                conf = int(data['conf'][i]) / 100.0
-                text_boxes.append(TextBox(text, (x, y, x + w, y + h), conf))
-
-    return text_boxes
-
-
 _ppocr_instance = None
 
 def run_ocr_ppocr(image_path):
@@ -1426,6 +1375,18 @@ def _merge_ensemble_results(boxes_cpu, boxes_metis):
     return result
 
 
+def run_ocr_metis(image_path):
+    """
+    Metis-only: accelerated detection + CPU recognition.
+    Falls back to CPU PP-OCR if Metis is unavailable.
+    """
+    boxes_metis = _run_metis_det_and_rec(image_path)
+    if boxes_metis is None:
+        print("   (Metis unavailable, using CPU only)")
+        return run_ocr_ppocr(image_path)
+    return boxes_metis
+
+
 def run_ocr_ppocr_metis(image_path):
     """
     Ensemble PP-OCR: run both CPU and Metis detection, merge best results.
@@ -1453,7 +1414,7 @@ def run_ocr_ppocr_metis(image_path):
 class ContinuousScanner:
     """Continuous book OCR scanner"""
 
-    def __init__(self, model='ppocr', auto_mode=False, preprocessing=True, debug=False):
+    def __init__(self, model='hybrid', auto_mode=False, preprocessing=True, debug=False):
         self.model = model
         self.auto_mode = auto_mode
         self.preprocessing = preprocessing
@@ -1489,7 +1450,7 @@ class ContinuousScanner:
 
     def _preload_ocr_models(self):
         """Preload OCR models at startup (before user interaction)"""
-        if self.model in ('ppocr', 'ppocr-metis'):
+        if self.model in ('cpu', 'metis', 'hybrid'):
             global _ppocr_instance
             if _ppocr_instance is None:
                 import warnings
@@ -1503,11 +1464,11 @@ class ContinuousScanner:
                 model_dir = os.path.expanduser('~/.paddleocr/whl')
                 first_download = not os.path.isdir(model_dir) or len(os.listdir(model_dir)) < 3
                 if first_download:
-                    print("⬇️  Download modelli PP-OCR (Latin, ~150MB)...")
+                    print("⬇️  Downloading PP-OCR models (Latin, ~150MB)...")
                     _ppocr_instance = PaddleOCR(use_angle_cls=True, lang='latin', use_gpu=False, show_log=True)
-                    print("✅ Download completato")
+                    print("✅ Download complete")
                 else:
-                    print("⏳ Caricamento modelli PP-OCR (Latin)...", end='', flush=True)
+                    print("⏳ Loading PP-OCR models (Latin)...", end='', flush=True)
                     _ppocr_instance = PaddleOCR(use_angle_cls=True, lang='latin', use_gpu=False, show_log=False)
 
                 # Force full model init with a dummy inference (file path required)
@@ -1522,13 +1483,13 @@ class ContinuousScanner:
                     print(" ✅")
                 warnings.resetwarnings()
 
-        if self.model == 'ppocr-metis':
-            print("⏳ Caricamento Metis accelerator...", end='', flush=True)
+        if self.model in ('metis', 'hybrid'):
+            print("⏳ Loading Metis accelerator...", end='', flush=True)
             result = _init_metis_det()
             if result:
                 print(" ✅")
             else:
-                print(" (non disponibile, fallback CPU)")
+                print(" (unavailable, falling back to CPU)")
 
     def _cleanup_temp_files(self):
         """Remove temporary files"""
@@ -1558,7 +1519,7 @@ class ContinuousScanner:
         """
         import glob
 
-        print("Pulizia file temporanei...")
+        print("Cleaning up temporary files...")
         cleaned = 0
 
         # 1. Remove temp files
@@ -1595,9 +1556,9 @@ class ContinuousScanner:
                 pass
 
         if cleaned > 0:
-            print(f"  Rimossi {cleaned} file")
+            print(f"  Removed {cleaned} files")
         else:
-            print("  Nessun file da rimuovere")
+            print("  No files to remove")
 
     def _delete_last_capture(self, capture_path):
         """Delete the last captured image after processing"""
@@ -1737,26 +1698,45 @@ class ContinuousScanner:
 
     def capture_and_crop(self):
         """Capture FRESH frame and crop to loading area"""
-        # Flush RTSP buffer by grabbing (no decode) for 2 seconds.
-        # During OCR (3-8s) the buffer accumulates hundreds of frames;
-        # grab() is fast (~0.5ms) vs read() (~15ms) so we can drain it quickly.
-        flush_duration = 2.0
-        flush_start = time.time()
-        flushed = 0
-        while time.time() - flush_start < flush_duration:
-            if not self.cap.grab():
-                # Stream lost, try reconnect
-                self.cap.release()
-                self.cap = cv2.VideoCapture(self.rtsp_url)
-                if not self.cap.isOpened():
-                    return None, None
-                break
-            flushed += 1
+        # Suppress ffmpeg H.264 decode warnings during flush/read.
+        # After grab() flush, the first decoded frames are often corrupt
+        # (partial P-frames without keyframe reference) which triggers
+        # harmless but noisy ffmpeg warnings on stderr.
+        stderr_fd = os.dup(2)
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, 2)
 
-        # Get fresh frame (decode only this one)
-        ret, frame = self.cap.read()
-        if not ret:
-            return None, None
+        try:
+            # Flush RTSP buffer by grabbing (no decode) for 2 seconds.
+            # During OCR (3-8s) the buffer accumulates hundreds of frames;
+            # grab() is fast (~0.5ms) vs read() (~15ms) so we can drain it quickly.
+            flush_duration = 2.0
+            flush_start = time.time()
+            flushed = 0
+            while time.time() - flush_start < flush_duration:
+                if not self.cap.grab():
+                    # Stream lost, try reconnect
+                    self.cap.release()
+                    self.cap = cv2.VideoCapture(self.rtsp_url)
+                    if not self.cap.isOpened():
+                        return None, None
+                    break
+                flushed += 1
+
+            # Get fresh frame (decode only this one)
+            # Retry up to 3 times to skip corrupt frames after flush.
+            frame = None
+            for _ in range(3):
+                ret, frame = self.cap.read()
+                if ret and frame is not None:
+                    break
+            if frame is None:
+                return None, None
+        finally:
+            # Restore stderr
+            os.dup2(stderr_fd, 2)
+            os.close(stderr_fd)
+            os.close(devnull)
 
         # Crop to loading area
         x1, y1, x2, y2 = self.loading_area
@@ -1816,36 +1796,22 @@ class ContinuousScanner:
     def run_ocr(self, image, timestamp=None):
         """Run OCR with preprocessing and postprocessing"""
         # Select OCR function
-        if self.model == 'tesseract':
-            ocr_func = run_ocr_tesseract
-        elif self.model == 'ppocr':
+        if self.model == 'cpu':
             ocr_func = run_ocr_ppocr
-        elif self.model == 'ppocr-metis':
+        elif self.model == 'metis':
+            ocr_func = run_ocr_metis
+        elif self.model == 'hybrid':
             ocr_func = run_ocr_ppocr_metis
         else:
             raise ValueError(f"Unknown OCR model: {self.model}")
 
-        # Multi-pass OCR for PP-OCR models with preprocessing
-        if self.preprocessing and self.model in ('ppocr', 'ppocr-metis'):
+        # Multi-pass OCR with preprocessing (upscale 2x + raw)
+        if self.preprocessing:
             text_boxes = self._run_ocr_multipass(image, ocr_func)
         else:
-            # Single pass (tesseract or no-preprocessing)
-            if self.preprocessing:
-                print(f"   └─ Preprocessing image...", end='', flush=True)
-                preprocessed = self.preprocessor.preprocess_for_tesseract(image)
-
-                temp_path = 'temp_ocr_input.jpg'
-                cv2.imwrite(temp_path, preprocessed)
-
-                if self.debug:
-                    debug_path = 'test_images/debug_preprocessed_last.jpg'
-                    cv2.imwrite(debug_path, preprocessed)
-                    print(f" ✅ (debug: {debug_path})")
-                else:
-                    print(" ✅")
-            else:
-                temp_path = 'temp_ocr_input.jpg'
-                cv2.imwrite(temp_path, image)
+            # No preprocessing: single pass on raw image
+            temp_path = 'temp_ocr_input.jpg'
+            cv2.imwrite(temp_path, image)
 
             print(f"   └─ Text detection & recognition...", end='', flush=True)
             text_boxes = ocr_func(temp_path)
@@ -1902,36 +1868,45 @@ class ContinuousScanner:
         print("="*70)
 
         # Database identification result
+        MIN_DB_CONFIDENCE = 0.60  # Below this, DB match is unreliable
         if db_result and db_result.get('matched') and db_result.get('book'):
             book = db_result['book']
             confidence_pct = int(db_result['match_confidence'] * 100)
-            print(f"\n   📖 LIBRO IDENTIFICATO ({confidence_pct}% match)")
-            print("-" * 70)
-            print(f"  Titolo:    {book.title}")
-            print(f"  Autore:    {book.author}")
-            if book.publisher:
-                print(f"  Editore:   {book.publisher}")
-            if book.isbn:
-                print(f"  ISBN:      {book.isbn}")
-            if book.year:
-                print(f"  Anno:      {book.year}")
-            if book.language:
-                lang_names = {'en': 'English', 'it': 'Italiano', 'fr': 'Français',
-                              'es': 'Español', 'de': 'Deutsch'}
-                print(f"  Lingua:    {lang_names.get(book.language, book.language)}")
-            print("-" * 70)
+
+            if db_result['match_confidence'] >= MIN_DB_CONFIDENCE:
+                print(f"\n   📖 BOOK IDENTIFIED ({confidence_pct}% match)")
+                print("-" * 70)
+                print(f"  Title:     {book.title}")
+                print(f"  Author:    {book.author}")
+                if book.publisher:
+                    print(f"  Publisher: {book.publisher}")
+                if book.isbn:
+                    print(f"  ISBN:      {book.isbn}")
+                if book.year:
+                    print(f"  Year:      {book.year}")
+                if book.language:
+                    lang_names = {'en': 'English', 'it': 'Italiano', 'fr': 'Français',
+                                  'es': 'Español', 'de': 'Deutsch'}
+                    print(f"  Language:  {lang_names.get(book.language, book.language)}")
+                print("-" * 70)
+            else:
+                print(f"\n   ⚠️  UNCERTAIN MATCH ({confidence_pct}% - below {int(MIN_DB_CONFIDENCE*100)}% threshold)")
+                print("-" * 70)
+                print(f"  OCR data:   {book_info['title']} - {book_info['author']} ({book_info['publisher']})")
+                print(f"  Candidate:  {book.title} - {book.author}")
+                print("-" * 70)
 
             # Show alternatives
             alternatives = db_result.get('alternatives', [])
             if alternatives:
-                print("  Alternative possibili:")
+                print("  Possible alternatives:")
                 for alt_book, alt_score in alternatives:
                     alt_pct = int(alt_score * 100)
                     pub_info = f" ({alt_book.publisher})" if alt_book.publisher else ""
                     print(f"    [{alt_pct}%] {alt_book.title} - {alt_book.author}{pub_info}")
                 print("-" * 70)
         elif db_result is not None:
-            print("\n   📖 Libro non trovato nel database")
+            print("\n   📖 Book not found in database")
 
         if show_raw and 'raw_text' in book_info:
             print("\n📝 All detected text blocks:")
@@ -2015,12 +1990,12 @@ class ContinuousScanner:
                 print("✅ [5/6] OCR completed")
 
                 # Database identification
-                print("🔎 [6/6] Ricerca nel database...", end='', flush=True)
+                print("🔎 [6/6] Searching database...", end='', flush=True)
                 db_result = self.identify_book(book_info)
                 if db_result['matched']:
                     print(" ✅")
                 else:
-                    print(" (non trovato)")
+                    print(" (not found)")
 
                 # Display
                 self.book_count += 1
@@ -2085,16 +2060,16 @@ def main():
 Examples:
   python3 scan_books.py                        # Manual mode with PP-OCR
   python3 scan_books.py --auto                 # Auto mode (3s delay)
-  python3 scan_books.py --model ppocr-metis    # Ensemble CPU+Metis (best quality)
-  python3 scan_books.py --model tesseract      # Use Tesseract
-  python3 scan_books.py --no-preprocessing     # Skip preprocessing
+  python3 scan_books.py --model cpu             # CPU-only
+  python3 scan_books.py --model metis          # Metis accelerator only
+  python3 scan_books.py --no-preprocessing     # Skip multi-pass, single raw pass
         """
     )
     parser.add_argument(
         '--model',
-        choices=['tesseract', 'ppocr', 'ppocr-metis'],
-        default='ppocr',
-        help="OCR model (default: ppocr)"
+        choices=['cpu', 'metis', 'hybrid'],
+        default='hybrid',
+        help="OCR model: cpu (CPU-only), metis (accelerator), hybrid (ensemble, default)"
     )
     parser.add_argument(
         '--auto',
