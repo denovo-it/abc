@@ -141,11 +141,5 @@ All times include multi-pass OCR. With `--no-preprocessing`: roughly half.
 
 ## OCR Engine
 
-**PaddleOCR v3 Latin** is the only OCR engine used. Previous engines
-(Tesseract, EasyOCR) have been removed:
-
-- Tesseract: Single-threaded, no hardware acceleration, removed
-- EasyOCR: PyTorch-based, slow (~15s/book), removed
-
-PP-OCR provides the best balance of speed, accuracy, and multi-core
+**PaddleOCR v3 Latin** - best balance of speed, accuracy, and multi-core
 utilization on the RK3588 platform.
