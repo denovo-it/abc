@@ -15,12 +15,13 @@ text line.
 
 ### Multi-Pass OCR
 
-When preprocessing is enabled (default), each mode runs two passes:
+When preprocessing is enabled (default), each mode runs 10 passes:
 1. **Pass 1:** Image upscaled 2x + light denoising - captures small text (publisher, subtitle)
 2. **Pass 2:** Raw original image - captures large/artistic text (title, author)
+3. **Passes 3-10:** Color filter variants (grayscale, inverted, R/G/B channels, inverted R/G/B) - reveals text hidden by artistic colors
 
 Results are merged by picking the highest-confidence detection per text line.
-Disable with `--no-preprocessing` for single-pass mode.
+Disable color filters with `--no-color-filters` for 2-pass mode. Disable all preprocessing with `--no-preprocessing` for single-pass mode.
 
 ---
 
@@ -137,6 +138,7 @@ Options:
   --lang {en,it}              Filter DB by language (default: all)
   --auto                      Auto mode (3s between scans)
   --no-preprocessing          Single pass, no upscale
+  --no-color-filters          Skip color filter passes (2 passes instead of 10)
   --debug                     Save intermediate images
 ```
 

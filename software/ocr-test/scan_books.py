@@ -8,7 +8,7 @@ Usage:
     python3 scan_books.py --auto             # Auto mode (3s delay between scans)
     python3 scan_books.py --model cpu        # CPU-only (faster, ~6s/book)
     python3 scan_books.py --no-preprocessing # Skip preprocessing
-    python3 scan_books.py --color-filters    # Extra passes with color filters
+    python3 scan_books.py --no-color-filters # Skip color filter passes (faster)
 
 OCR Models:
     - cpu: CPU-only PP-OCR, multi-pass upscale+raw (~6s/book)
@@ -1572,7 +1572,7 @@ def run_ocr_ppocr_metis(image_path):
 class ContinuousScanner:
     """Continuous book OCR scanner"""
 
-    def __init__(self, model='hybrid', auto_mode=False, preprocessing=True, debug=False, lang=None, color_filters=False):
+    def __init__(self, model='hybrid', auto_mode=False, preprocessing=True, debug=False, lang=None, color_filters=True):
         self.model = model
         self.auto_mode = auto_mode
         self.preprocessing = preprocessing
@@ -1910,7 +1910,7 @@ class ContinuousScanner:
         Multi-pass OCR: different preprocessings capture different text types.
         Pass 1: Upscale 2x + light denoise → small text (publisher, subtitle)
         Pass 2: Raw original image → large artistic text (title)
-        Optional: Color filter passes (--color-filters) → text hidden by artistic colors
+        Passes 3-10: Color filter passes (disable with --no-color-filters) → text hidden by artistic colors
         Merge by picking highest confidence per text line.
         """
         all_pass_boxes = []
@@ -1919,16 +1919,13 @@ class ContinuousScanner:
         total_passes = 2 + (8 if self.color_filters else 0)
 
         # Pass 1: Upscale + denoise
-        print(f"   └─ Pass 1/{total_passes}: Upscale {scale:.0f}x + denoise...", end='', flush=True)
+        print(f"   └─ Pass 1/{total_passes}: Upscale {scale:.0f}x + denoise + OCR...", end='', flush=True)
         upscaled = self.preprocessor.preprocess_for_ppocr_upscale(image, scale)
         temp_up = '/tmp/ocr_pass_upscale.jpg'
         cv2.imwrite(temp_up, upscaled)
         temp_files.append(temp_up)
         if self.debug:
             cv2.imwrite('test_images/debug_upscaled_last.jpg', upscaled)
-        print(" done")
-
-        print(f"   └─ Pass 1/{total_passes}: OCR...", end='', flush=True)
         boxes_upscale = ocr_func(temp_up)
         boxes_upscale = [
             TextBox(b.text,
@@ -2264,7 +2261,7 @@ Examples:
   python3 scan_books.py --model cpu             # CPU-only
   python3 scan_books.py --model metis          # Metis accelerator only
   python3 scan_books.py --no-preprocessing     # Skip multi-pass, single raw pass
-  python3 scan_books.py --color-filters        # 10 passes: upscale + raw + 8 color filters
+  python3 scan_books.py --no-color-filters      # 2 passes only: upscale + raw (skip color filters)
         """
     )
     parser.add_argument(
@@ -2290,9 +2287,9 @@ Examples:
         help="Filter DB search by language (default: all languages)"
     )
     parser.add_argument(
-        '--color-filters',
+        '--no-color-filters',
         action='store_true',
-        help="Extra OCR passes with color filters (grayscale, inverted, R/G/B channels)"
+        help="Disable color filter passes (default: enabled, 10 passes total)"
     )
     parser.add_argument(
         '--debug',
@@ -2308,7 +2305,7 @@ Examples:
         preprocessing=not args.no_preprocessing,
         debug=args.debug,
         lang=args.lang,
-        color_filters=args.color_filters
+        color_filters=not args.no_color_filters
     )
 
     scanner.run()
