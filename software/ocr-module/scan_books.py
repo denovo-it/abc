@@ -29,6 +29,7 @@ import os
 import re
 import argparse
 import subprocess
+import multiprocessing as mp
 import numpy as np
 import json
 from datetime import datetime
@@ -1185,6 +1186,41 @@ class BookCoverParser:
 
 _ppocr_instance = None
 
+
+def _ppocr_worker(image_path, result_queue):
+    """Worker for subprocess-safe PaddleOCR call."""
+    try:
+        global _ppocr_instance
+        result = _ppocr_instance.ocr(image_path, cls=True)
+        result_queue.put(result)
+    except Exception:
+        result_queue.put(None)
+
+
+def _safe_ppocr_ocr(image_path, timeout=60):
+    """Run PaddleOCR in a forked subprocess to survive C++ segfaults.
+    Returns OCR results or None if the subprocess crashed/timed out."""
+    q = mp.Queue()
+    p = mp.Process(target=_ppocr_worker, args=(image_path, q))
+    p.start()
+    p.join(timeout)
+
+    if p.is_alive():
+        p.kill()
+        p.join()
+        print(f"\n   ⚠️  PaddleOCR timed out ({timeout}s), skipping")
+        return None
+
+    if p.exitcode != 0:
+        print(f"\n   ⚠️  PaddleOCR crashed (exit code {p.exitcode}), skipping")
+        return None
+
+    try:
+        return q.get_nowait()
+    except Exception:
+        return None
+
+
 def run_ocr_ppocr(image_path):
     """Run PP-OCR on image (singleton initialized by _preload_ocr_models)"""
     global _ppocr_instance
@@ -1201,7 +1237,7 @@ def run_ocr_ppocr(image_path):
         _ppocr_instance = PaddleOCR(use_angle_cls=True, lang='latin', use_gpu=False, show_log=False)
         warnings.resetwarnings()
 
-    results = _ppocr_instance.ocr(image_path, cls=True)
+    results = _safe_ppocr_ocr(image_path)
 
     text_boxes = []
     if results and results[0]:
@@ -1459,8 +1495,8 @@ def _run_metis_det_and_rec(image_path):
             temp_crop = '/tmp/metis_crop_temp.jpg'
             cv2.imwrite(temp_crop, crop)
 
-            # Run recognition only
-            rec_results = _ppocr_instance.ocr(temp_crop, cls=True)
+            # Run recognition only (subprocess-safe)
+            rec_results = _safe_ppocr_ocr(temp_crop, timeout=30)
 
             if rec_results and rec_results[0]:
                 for line in rec_results[0]:
@@ -2247,25 +2283,29 @@ class ContinuousScanner:
                 # Note: image will be deleted after OCR processing to save space
                 print(" ✅")
 
-                # OCR
-                print(f"🔍 [3/6] Running OCR ({self.model})...")
-                book_info = self.run_ocr(cropped, timestamp)
-                print("✅ [5/6] OCR completed")
+                # OCR + DB identification (protected against OCR crashes)
+                try:
+                    print(f"🔍 [3/6] Running OCR ({self.model})...")
+                    book_info = self.run_ocr(cropped, timestamp)
+                    print("✅ [5/6] OCR completed")
 
-                # Database identification
-                print("🔎 [6/6] Searching database...", end='', flush=True)
-                db_result = self.identify_book(book_info)
-                if db_result['matched']:
-                    print(" ✅")
-                else:
-                    print(" (not found)")
+                    # Database identification
+                    print("🔎 [6/6] Searching database...", end='', flush=True)
+                    db_result = self.identify_book(book_info)
+                    if db_result['matched']:
+                        print(" ✅")
+                    else:
+                        print(" (not found)")
 
-                # Display
-                self.book_count += 1
-                self.display_result(book_info, db_result=db_result)
+                    # Display
+                    self.book_count += 1
+                    self.display_result(book_info, db_result=db_result)
 
-                # Save to log
-                self._log_result(timestamp, book_info, db_result=db_result)
+                    # Save to log
+                    self._log_result(timestamp, book_info, db_result=db_result)
+                except Exception as e:
+                    print(f"\n⚠️  OCR/identification error: {e}")
+                    print("   Skipping this scan, returning to watch mode...")
 
                 # Delete captured image to save space
                 self._delete_last_capture(capture_path)

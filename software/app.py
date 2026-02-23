@@ -33,6 +33,8 @@ import warnings
 os.environ.setdefault('ORT_LOG_LEVEL', '3')
 os.environ.setdefault('LIBGL_ALWAYS_SOFTWARE', '1')
 os.environ.setdefault('MESA_GL_VERSION_OVERRIDE', '3.3')
+os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '3')      # silence TFLite/MediaPipe logs
+os.environ.setdefault('GLOG_minloglevel', '2')           # silence MediaPipe C++ warnings
 warnings.filterwarnings('ignore', message='.*device_discovery.*')
 
 # Redirect stderr briefly to suppress libGL errors from OpenCV import
@@ -129,13 +131,39 @@ from axelera.app import create_inference_stream  # noqa: E402
 BOOK_CLASS_ID = 73
 PERSON_CLASS_ID = 0
 DETECTION_MODEL = 'yolov8l-coco-onnx'
-POSE_MODEL = 'yolov8lpose-coco-onnx'
 
-# COCO pose keypoint indices
-KP_LEFT_SHOULDER = 5
-KP_RIGHT_SHOULDER = 6
-KP_LEFT_WRIST = 9
-KP_RIGHT_WRIST = 10
+# ---------------------------------------------------------------------------
+# Loading area (detection region filter)
+# ---------------------------------------------------------------------------
+
+_loading_area = None
+
+
+def _load_loading_area():
+    """Load calibrated loading area from ocr-module config."""
+    global _loading_area
+    if _loading_area is not None:
+        return _loading_area
+
+    config_file = os.path.join(_OCR_DIR, 'test_images', 'loading_area.txt')
+    if not os.path.exists(config_file):
+        print("  WARNING: No loading_area.txt found, detection uses full frame")
+        _loading_area = ()  # empty tuple = disabled
+        return _loading_area
+
+    with open(config_file, 'r') as f:
+        coords = f.readline().strip()
+        _loading_area = tuple(map(int, coords.split(',')))
+    return _loading_area
+
+
+def _det_in_loading_area(det_box, loading_area):
+    """Check if detection bounding box overlaps with loading area."""
+    if not loading_area:
+        return True  # no loading area configured, accept all
+    dx1, dy1, dx2, dy2 = det_box
+    lx1, ly1, lx2, ly2 = loading_area
+    return dx1 < lx2 and dx2 > lx1 and dy1 < ly2 and dy2 > ly1
 
 
 # ---------------------------------------------------------------------------
@@ -158,12 +186,6 @@ def _rtsp_url_safe(url):
 # ---------------------------------------------------------------------------
 # Startup checks
 # ---------------------------------------------------------------------------
-
-def _check_pose_model():
-    """Check if the pose model is compiled. Returns True if available."""
-    build_dir = os.path.join(_SDK_DIR, 'build', POSE_MODEL)
-    return os.path.isdir(build_dir)
-
 
 def _kill_stale_metis():
     """Kill processes holding Metis device to avoid allocation failures."""
@@ -215,6 +237,7 @@ def watch_for_book(rtsp_url, confidence_threshold=0.30, consecutive_needed=5,
         pipeline_configs=pipeline_cfg,
     )
 
+    loading_area = _load_loading_area()
     consecutive_book = 0
     frame_count = 0
     captured_frame = None
@@ -233,6 +256,8 @@ def watch_for_book(rtsp_url, confidence_threshold=0.30, consecutive_needed=5,
             for det in frame_result.detections:
                 cid = int(det.class_id)
                 score = float(det.score)
+                if not _det_in_loading_area(det.box.tolist(), loading_area):
+                    continue  # ignore detections outside loading area
                 if cid == BOOK_CLASS_ID and score >= confidence_threshold:
                     has_book = True
                     book_score = max(book_score, score)
@@ -279,6 +304,11 @@ def watch_for_book(rtsp_url, confidence_threshold=0.30, consecutive_needed=5,
         if not debug and dot_count > 0:
             print()
         raise
+    except RuntimeError as e:
+        if not debug and dot_count > 0:
+            print()
+        print(f"  Inference stream error: {e}")
+        print("  Retrying...")
     finally:
         stream.stop()
 
@@ -674,130 +704,160 @@ def display_result(book_info, db_result, book_count):
 
 
 # ---------------------------------------------------------------------------
-# STATE: FEEDBACK - detect crossed wrists gesture via YOLOv8-Pose
+# STATE: FEEDBACK - detect crossed index fingers via MediaPipe Hands
 # ---------------------------------------------------------------------------
 
-def wait_for_feedback(rtsp_url, timeout=15.0, debug=False):
-    """Watch for crossed-wrists rejection gesture.
+_mp_hands = None
 
-    Uses YOLOv8-Pose on Metis NPU. Returns 'accept' (timeout) or 'reject' (gesture).
 
-    Crossed wrists detection:
-      - Left wrist X < right wrist X (arms crossed from person's perspective)
-      - Wrists close together (distance < 30% of shoulder width)
-      - Both wrists visible (confidence > 0.3)
-      - Held for ~1s of consecutive frames
-    """
-    print(f"\n  FEEDBACK: Show crossed wrists to REJECT (timeout {timeout:.0f}s)")
+def _init_mediapipe_hands():
+    """Lazy-init MediaPipe Hands detector (singleton)."""
+    global _mp_hands
+    if _mp_hands is not None:
+        return _mp_hands
 
-    pipeline_cfg = ax_config.PipelineConfig(
-        network=POSE_MODEL,
-        sources=[rtsp_url],
-        pipe_type='gst',
-    )
-    stream_cfg = ax_config.InferenceStreamConfig(
-        timeout=10,
-        frames=0,  # continuous
-    )
-
-    stream = create_inference_stream(
-        stream_config=stream_cfg,
-        pipeline_configs=pipeline_cfg,
-    )
-
-    consecutive_gesture = 0
-    gesture_frames_needed = 15  # ~1s at ~15fps
-    start_time = time.time()
-    result = 'accept'
-
+    # Suppress noisy C++ warnings from TFLite/abseil/cpuinfo during init
+    stderr_fd = os.dup(2)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull, 2)
     try:
-        for frame_result in stream:
-            elapsed = time.time() - start_time
-            remaining = timeout - elapsed
-            if remaining <= 0:
-                break
-
-            # Print countdown
-            if not debug:
-                sys.stdout.write(f"\r  Time remaining: {remaining:.0f}s "
-                                 f"{'X' * consecutive_gesture}"
-                                 f"{'.' * (gesture_frames_needed - consecutive_gesture)}"
-                                 f"   ")
-                sys.stdout.flush()
-
-            # Check for pose keypoints
-            gesture_detected = False
-            for det in frame_result.keypoint_detections:
-                kps = det.keypoints  # numpy (17, 3): [x, y, visibility]
-
-                lw = kps[KP_LEFT_WRIST]    # left wrist
-                rw = kps[KP_RIGHT_WRIST]   # right wrist
-                ls = kps[KP_LEFT_SHOULDER]  # left shoulder
-                rs = kps[KP_RIGHT_SHOULDER] # right shoulder
-
-                # Both wrists must be visible
-                if lw[2] < 0.3 or rw[2] < 0.3:
-                    continue
-
-                # Shoulder width for scale reference
-                if ls[2] > 0.3 and rs[2] > 0.3:
-                    shoulder_width = abs(ls[0] - rs[0])
-                else:
-                    shoulder_width = 200  # fallback
-
-                # Crossed: left wrist X < right wrist X
-                # (COCO convention: left=person's left, so in image left_wrist
-                #  is normally on the RIGHT side of the image. If it appears
-                #  on the LEFT, the arms are crossed.)
-                wrists_crossed = lw[0] < rw[0]
-
-                # Wrists close together
-                wrist_dist = np.sqrt((lw[0] - rw[0])**2 + (lw[1] - rw[1])**2)
-                wrists_close = wrist_dist < shoulder_width * 0.5
-
-                if wrists_crossed and wrists_close:
-                    gesture_detected = True
-                    if debug:
-                        print(f"  Gesture frame: lw=({lw[0]:.0f},{lw[1]:.0f})"
-                              f" rw=({rw[0]:.0f},{rw[1]:.0f})"
-                              f" dist={wrist_dist:.0f} sw={shoulder_width:.0f}")
-                    break
-
-            if gesture_detected:
-                consecutive_gesture += 1
-                if consecutive_gesture >= gesture_frames_needed:
-                    result = 'reject'
-                    break
-            else:
-                consecutive_gesture = 0
-
-    except KeyboardInterrupt:
-        raise
+        import mediapipe as mp
+        _mp_hands = mp.solutions.hands.Hands(
+            static_image_mode=False,
+            max_num_hands=2,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.4,
+        )
     finally:
-        print()  # clear the \r line
-        stream.stop()
+        os.dup2(stderr_fd, 2)
+        os.close(stderr_fd)
+        os.close(devnull)
 
-    return result
+    return _mp_hands
+
+
+def _detect_crossed_fingers(frame, hands, debug=False):
+    """Detect crossed index fingers gesture using MediaPipe Hands.
+
+    Returns True if both hands are visible with index fingers extended and
+    crossing each other (forming an X shape).
+
+    MediaPipe hand landmarks:
+      5 = INDEX_FINGER_MCP (base)
+      6 = INDEX_FINGER_PIP
+      7 = INDEX_FINGER_DIP
+      8 = INDEX_FINGER_TIP
+    """
+    # MediaPipe expects RGB; suppress C++ warnings during inference
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    stderr_fd = os.dup(2)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull, 2)
+    try:
+        result = hands.process(rgb)
+    finally:
+        os.dup2(stderr_fd, 2)
+        os.close(stderr_fd)
+        os.close(devnull)
+
+    n_hands = len(result.multi_hand_landmarks) if result.multi_hand_landmarks else 0
+    if debug:
+        print(f"  [mp] hands={n_hands}", end='')
+    if n_hands < 2:
+        if debug:
+            print()
+        return False
+
+    h, w = frame.shape[:2]
+    fingers = []
+
+    for hand_lms in result.multi_hand_landmarks[:2]:
+        lm = hand_lms.landmark
+
+        # Index finger landmarks (normalized 0-1)
+        mcp = lm[5]   # base
+        pip_ = lm[6]  # middle joint
+        tip = lm[8]   # tip
+
+        # Check index finger is extended: tip is further from wrist than PIP
+        wrist = lm[0]
+        tip_d = np.sqrt((tip.x - wrist.x)**2 + (tip.y - wrist.y)**2)
+        pip_d = np.sqrt((pip_.x - wrist.x)**2 + (pip_.y - wrist.y)**2)
+        extended = tip_d > pip_d * 1.1
+        if debug:
+            print(f" idx_ext={extended}({tip_d:.2f}/{pip_d:.2f})", end='')
+        if not extended:
+            continue  # finger not extended
+
+        # Store finger line (base to tip) in pixel coords
+        fingers.append({
+            'base': (mcp.x * w, mcp.y * h),
+            'tip': (tip.x * w, tip.y * h),
+        })
+
+    if debug:
+        print(f" valid_fingers={len(fingers)}")
+    if len(fingers) < 2:
+        return False
+
+    f1, f2 = fingers[0], fingers[1]
+
+    # Check tips are close together (within 15% of frame width)
+    tip_dist = np.sqrt((f1['tip'][0] - f2['tip'][0])**2 +
+                       (f1['tip'][1] - f2['tip'][1])**2)
+    close_threshold = w * 0.15
+    if tip_dist > close_threshold:
+        if debug:
+            print(f"  Tips too far: {tip_dist:.0f}px (threshold {close_threshold:.0f})")
+        return False
+
+    # Check fingers cross: the two line segments (base→tip) intersect.
+    # Use cross product to detect opposite orientations.
+    d1 = (f1['tip'][0] - f1['base'][0], f1['tip'][1] - f1['base'][1])
+    d2 = (f2['tip'][0] - f2['base'][0], f2['tip'][1] - f2['base'][1])
+    cross = d1[0] * d2[1] - d1[1] * d2[0]
+
+    # Non-parallel fingers with significant cross product = crossing
+    len1 = np.sqrt(d1[0]**2 + d1[1]**2)
+    len2 = np.sqrt(d2[0]**2 + d2[1]**2)
+    if len1 < 1 or len2 < 1:
+        return False
+
+    sin_angle = abs(cross) / (len1 * len2)
+    crossed = sin_angle > 0.3  # angle > ~17 degrees
+
+    if debug:
+        print(f"  Fingers: tips_dist={tip_dist:.0f}px"
+              f" sin_angle={sin_angle:.2f} crossed={crossed}")
+
+    return crossed
 
 
 # ---------------------------------------------------------------------------
-# STATE: WAITING - wait for book to be removed before next cycle
+# STATE: WAITING - wait for removal OR detect rejection gesture
 # ---------------------------------------------------------------------------
 
-def wait_for_removal(rtsp_url, confidence_threshold=0.30, debug=False):
+def wait_for_removal(rtsp_url, confidence_threshold=0.30, feedback=True,
+                     debug=False):
     """Wait until the scanned book is removed from the scene.
 
     Uses YOLOv8 object detection on Metis NPU (same as WATCHING).
-    Stays in this state while a book is visible with no person.
-    Exits when:
-      - A person appears (hands removing the book), OR
-      - The book disappears from the scene, OR
-      - The user presses ENTER to quit
+    When a person is detected AND feedback is enabled, grabs the frame and
+    checks for crossed index fingers via MediaPipe (reject gesture).
 
-    Returns 'continue' (scene changed) or 'quit' (user pressed ENTER).
+    Exits when:
+      - Crossed fingers detected (person + gesture) -> 'reject'
+      - A person appears without gesture (removing book) -> 'continue'
+      - The book disappears from the scene -> 'continue'
+      - The user presses ENTER -> 'quit'
+
+    Returns 'continue', 'reject', or 'quit'.
     """
     print("\n" + "=" * 60)
-    print("  WAITING - Remove book to continue (ENTER to quit)")
+    if feedback:
+        print("  WAITING - Cross fingers to REJECT, remove book to continue")
+    else:
+        print("  WAITING - Remove book to continue (ENTER to quit)")
     print("=" * 60)
 
     pipeline_cfg = ax_config.PipelineConfig(
@@ -815,8 +875,12 @@ def wait_for_removal(rtsp_url, confidence_threshold=0.30, debug=False):
         pipeline_configs=pipeline_cfg,
     )
 
+    hands = _init_mediapipe_hands() if feedback else None
+    loading_area = _load_loading_area()
     consecutive_clear = 0
-    clear_frames_needed = 10  # ~0.5s at ~20fps — scene changed
+    consecutive_gesture = 0
+    clear_frames_needed = 30   # ~1.5s at ~20fps — gives time to show gesture
+    gesture_frames_needed = 5  # ~0.25s — quick reject once detected
     frame_count = 0
     dot_count = 0
     result = 'continue'
@@ -841,45 +905,92 @@ def wait_for_removal(rtsp_url, confidence_threshold=0.30, debug=False):
             for det in frame_result.detections:
                 cid = int(det.class_id)
                 score = float(det.score)
+                if not _det_in_loading_area(det.box.tolist(), loading_area):
+                    continue  # ignore detections outside loading area
                 if cid == BOOK_CLASS_ID and score >= confidence_threshold:
                     has_book = True
                 if cid == PERSON_CLASS_ID and score >= 0.30:
                     has_person = True
 
-            # Exit condition: person appeared (removing book) OR book gone
-            scene_changed = has_person or not has_book
+            # When person detected + feedback enabled, check for gesture
+            # Use FULL frame for MediaPipe (hands may be outside loading area)
+            gesture_detected = False
+            if has_person and hands is not None:
+                try:
+                    frame_bgr = frame_result.image.asarray('BGR')
 
-            if scene_changed:
-                consecutive_clear += 1
-                if debug:
-                    reason = "person" if has_person else "no book"
-                    print(f"  Frame {frame_count}: {reason}"
-                          f" [{consecutive_clear}/{clear_frames_needed}]")
-                else:
-                    sys.stdout.write('*')
-                    sys.stdout.flush()
-                    dot_count += 1
+                    # Save first person frame for debugging
+                    if debug and consecutive_clear == 0 and consecutive_gesture == 0:
+                        dbg_path = '/tmp/gesture_debug_frame.jpg'
+                        cv2.imwrite(dbg_path, frame_bgr)
+                        print(f"\n  [debug] Saved gesture frame: {dbg_path}"
+                              f" ({frame_bgr.shape[1]}x{frame_bgr.shape[0]})")
 
-                if consecutive_clear >= clear_frames_needed:
-                    if not debug and dot_count > 0:
-                        print()
-                    reason = "person detected" if has_person else "book removed"
-                    print(f"  Scene changed ({reason}), resuming...")
-                    break
-            else:
+                    gesture_detected = _detect_crossed_fingers(
+                        frame_bgr, hands, debug=debug)
+                except Exception as e:
+                    if debug:
+                        print(f"\n  [debug] Gesture check error: {e}")
+
+            if gesture_detected:
+                consecutive_gesture += 1
                 consecutive_clear = 0
                 if not debug:
-                    sys.stdout.write('.')
+                    sys.stdout.write('X')
                     sys.stdout.flush()
                     dot_count += 1
-                    if dot_count >= 80:
+                else:
+                    print(f"  Frame {frame_count}: GESTURE"
+                          f" [{consecutive_gesture}/{gesture_frames_needed}]")
+
+                if consecutive_gesture >= gesture_frames_needed:
+                    if not debug and dot_count > 0:
                         print()
-                        dot_count = 0
+                    print("  Crossed fingers detected!")
+                    result = 'reject'
+                    break
+            else:
+                consecutive_gesture = 0
+
+                # Exit condition: person appeared (removing book) OR book gone
+                scene_changed = has_person or not has_book
+
+                if scene_changed:
+                    consecutive_clear += 1
+                    if debug:
+                        reason = "person" if has_person else "no book"
+                        print(f"  Frame {frame_count}: {reason}"
+                              f" [{consecutive_clear}/{clear_frames_needed}]")
+                    else:
+                        sys.stdout.write('*')
+                        sys.stdout.flush()
+                        dot_count += 1
+
+                    if consecutive_clear >= clear_frames_needed:
+                        if not debug and dot_count > 0:
+                            print()
+                        reason = "person detected" if has_person else "book removed"
+                        print(f"  Scene changed ({reason}), resuming...")
+                        break
+                else:
+                    consecutive_clear = 0
+                    if not debug:
+                        sys.stdout.write('.')
+                        sys.stdout.flush()
+                        dot_count += 1
+                        if dot_count >= 80:
+                            print()
+                            dot_count = 0
 
     except KeyboardInterrupt:
         if not debug and dot_count > 0:
             print()
         raise
+    except RuntimeError as e:
+        if not debug and dot_count > 0:
+            print()
+        print(f"  Inference stream error: {e}")
+        print("  Continuing...")
     finally:
         stream.stop()
 
@@ -905,20 +1016,23 @@ def run_pipeline(args):
     print(f"  Confidence:    >= {args.confidence*100:.0f}%")
     print(f"  Consecutive:   {args.consecutive} frames")
     print(f"  Color filters: {'Yes' if args.color_filters else 'No'}")
-    print(f"  Feedback:      {'Yes ({:.0f}s timeout)'.format(args.feedback_timeout) if not args.no_feedback else 'No (auto-accept)'}")
+    feedback_desc = "Crossed fingers (MediaPipe Hands)" if not args.no_feedback else "No (auto-accept)"
+    print(f"  Feedback:      {feedback_desc}")
     print(f"  Camera:        {_rtsp_url_safe(rtsp_url)}")
+    loading_area = _load_loading_area()
+    if loading_area:
+        lx1, ly1, lx2, ly2 = loading_area
+        print(f"  Loading area:  ({lx1},{ly1})-({lx2},{ly2})"
+              f" {lx2-lx1}x{ly2-ly1}px")
+    else:
+        print(f"  Loading area:  FULL FRAME (no calibration)")
     print("=" * 60)
 
-    # Startup checks
+    # Pre-init MediaPipe Hands for gesture feedback
     if not args.no_feedback:
-        if not _check_pose_model():
-            print(f"\n  WARNING: Pose model '{POSE_MODEL}' not compiled.")
-            print(f"  Compile it with:")
-            print(f"    cd {_SDK_DIR} && source venv/bin/activate")
-            print(f"    ./inference.py {POSE_MODEL} media/traffic1_1080p.mp4"
-                  f" --frames 1 --no-display")
-            print(f"\n  Running with --no-feedback for now.\n")
-            args.no_feedback = True
+        print("\n  Loading MediaPipe Hands...", end='', flush=True)
+        _init_mediapipe_hands()
+        print(" done")
 
     _kill_stale_metis()
 
@@ -961,31 +1075,14 @@ def run_pipeline(args):
             book_count += 1
             display_result(book_info, db_result, book_count)
 
-            # --- FEEDBACK ---
-            if not args.no_feedback:
-                gc.collect()
-                time.sleep(0.5)
-
-                feedback = wait_for_feedback(
-                    rtsp_url,
-                    timeout=args.feedback_timeout,
-                    debug=args.debug,
-                )
-
-                if feedback == 'reject':
-                    print("  >> REJECTED by user gesture")
-                else:
-                    print("  >> ACCEPTED (timeout)")
-            else:
-                print("  >> ACCEPTED (auto)")
-
-            # --- WAITING ---
+            # --- WAITING (with integrated gesture detection) ---
             gc.collect()
             time.sleep(0.5)
 
             wait_result = wait_for_removal(
                 rtsp_url,
                 confidence_threshold=args.confidence,
+                feedback=not args.no_feedback,
                 debug=args.debug,
             )
 
@@ -993,6 +1090,10 @@ def run_pipeline(args):
                 print(f"\n  Books scanned: {book_count}")
                 print("  Pipeline stopped.\n")
                 return
+            elif wait_result == 'reject':
+                print("  >> REJECTED by user gesture")
+            else:
+                print("  >> ACCEPTED")
 
             print()
 
@@ -1022,9 +1123,6 @@ def main():
     parser.add_argument(
         '--consecutive', type=int, default=5,
         help='Consecutive frames to confirm book detection (default: 5)')
-    parser.add_argument(
-        '--feedback-timeout', type=float, default=15.0,
-        help='Gesture feedback window in seconds (default: 15)')
     parser.add_argument(
         '--color-filters', action='store_true',
         help='Enable extra OCR passes with color filters (slower)')
