@@ -1,0 +1,139 @@
+digraph ABCPipeline {
+    // Graph settings
+    rankdir=TB;
+    bgcolor="#FAFAFA";
+    fontname="Helvetica";
+    label=<<B><FONT POINT-SIZE="22">A.B.C. Pipeline Flow</FONT></B><BR/><FONT POINT-SIZE="12" COLOR="#666666">AI Book Cataloguer — State Machine</FONT>>;
+    labelloc=t;
+    labeljust=c;
+    pad=0.5;
+    nodesep=0.6;
+    ranksep=0.8;
+
+    // Default node style
+    node [fontname="Helvetica", fontsize=11, style="filled,rounded", shape=box, penwidth=1.5];
+    edge [fontname="Helvetica", fontsize=9, color="#555555", penwidth=1.2];
+
+    // Start/End
+    start [label="START", shape=circle, width=0.8, fixedsize=true,
+           fillcolor="#333333", fontcolor="white", fontsize=10];
+    stop  [label="STOP",  shape=doublecircle, width=0.8, fixedsize=true,
+           fillcolor="#333333", fontcolor="white", fontsize=10];
+
+    // === STATE: WATCHING ===
+    watching [
+        label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="2">
+            <TR><TD><B><FONT POINT-SIZE="14">WATCHING</FONT></B></TD></TR>
+            <TR><TD><FONT POINT-SIZE="9" COLOR="#444444">YOLOv8 on Metis NPU (~45 fps)</FONT></TD></TR>
+            <TR><TD><FONT POINT-SIZE="9" COLOR="#444444">Detect book in loading area</FONT></TD></TR>
+        </TABLE>>,
+        fillcolor="#E3F2FD", color="#1565C0", fontcolor="#0D47A1"
+    ];
+
+    // === STATE: SCANNING ===
+    scanning [
+        label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="2">
+            <TR><TD><B><FONT POINT-SIZE="14">SCANNING</FONT></B></TD></TR>
+            <TR><TD><FONT POINT-SIZE="9" COLOR="#444444">PaddleOCR v3 (CPU/Hybrid)</FONT></TD></TR>
+            <TR><TD><FONT POINT-SIZE="9" COLOR="#444444">OCR + DB identification</FONT></TD></TR>
+        </TABLE>>,
+        fillcolor="#FFF3E0", color="#E65100", fontcolor="#BF360C"
+    ];
+
+    // === STATE: WAITING ===
+    waiting [
+        label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="2">
+            <TR><TD><B><FONT POINT-SIZE="14">WAITING</FONT></B></TD></TR>
+            <TR><TD><FONT POINT-SIZE="9" COLOR="#444444">YOLOv8n-pose on Metis NPU</FONT></TD></TR>
+            <TR><TD><FONT POINT-SIZE="9" COLOR="#444444">Person presence (~4s = reject)</FONT></TD></TR>
+        </TABLE>>,
+        fillcolor="#E8F5E9", color="#2E7D32", fontcolor="#1B5E20"
+    ];
+
+    // Decision nodes
+    book_detected [
+        label=<<B>Book detected?</B><BR/><FONT POINT-SIZE="8">3 consecutive frames</FONT>>,
+        shape=diamond, fillcolor="#F5F5F5", color="#757575",
+        height=1.0, width=2.2
+    ];
+
+    display_result [
+        label=<<B>Display Result</B><BR/><FONT POINT-SIZE="8">Title, Author, Publisher</FONT>>,
+        fillcolor="#FFF9C4", color="#F9A825", fontcolor="#F57F17",
+        shape=box
+    ];
+
+    person_check [
+        label=<<B>Person detected?</B>>,
+        shape=diamond, fillcolor="#F5F5F5", color="#757575",
+        height=0.9, width=2.0
+    ];
+
+    gesture_check [
+        label=<<B>Person stays &gt;4s?</B><BR/><FONT POINT-SIZE="8">80 frames (~4s)</FONT>>,
+        shape=diamond, fillcolor="#FCE4EC", color="#C62828",
+        height=1.0, width=2.2
+    ];
+
+    person_left [
+        label=<<B>Person left?</B><BR/><FONT POINT-SIZE="8">30 frames (~1.5s)</FONT>>,
+        shape=diamond, fillcolor="#F5F5F5", color="#757575",
+        height=1.0, width=2.0
+    ];
+
+    // Result nodes
+    accepted [
+        label=<<B>ACCEPTED</B>>,
+        fillcolor="#C8E6C9", color="#2E7D32", fontcolor="#1B5E20",
+        shape=box, width=1.5
+    ];
+
+    rejected [
+        label=<<B>REJECTED</B>>,
+        fillcolor="#FFCDD2", color="#C62828", fontcolor="#B71C1C",
+        shape=box, width=1.5
+    ];
+
+    // === EDGES ===
+
+    // Start -> Watching
+    start -> watching [label="  init pipeline"];
+
+    // Watching loop
+    watching -> book_detected;
+    book_detected -> watching [label="  no  ", style=dashed, color="#999999"];
+    book_detected -> scanning [label="  yes — capture frame  "];
+
+    // Scanning -> Display -> Waiting
+    scanning -> display_result;
+    display_result -> waiting;
+
+    // Waiting logic
+    waiting -> person_check;
+
+    // Person detected -> gesture check
+    person_check -> gesture_check [label="  yes  "];
+    person_check -> person_left [label="  no (was seen)  "];
+
+    // Gesture outcomes
+    gesture_check -> rejected [label=<<FONT COLOR="#C62828">  yes (P×80)  </FONT>>,
+                               color="#C62828", penwidth=2.0];
+    gesture_check -> waiting [label="  no (?)\nkeep waiting  ", style=dashed, color="#999999"];
+
+    // Person left check
+    person_left -> accepted [label="  yes (*×30)  ", color="#2E7D32", penwidth=2.0];
+    person_left -> waiting [label="  not yet (.)\nkeep waiting  ", style=dashed, color="#999999"];
+
+    // Loop back
+    accepted -> watching [label="  next book  ", color="#2E7D32", style=bold];
+    rejected -> watching [label="  next book  ", color="#C62828", style=bold];
+
+    // ENTER -> quit
+    waiting -> stop [label="  ENTER pressed  ", style=dashed, color="#666666"];
+
+    // Ctrl+C
+    watching -> stop [label="  Ctrl+C  ", style=dashed, color="#999999"];
+
+    // Rank hints
+    {rank=same; accepted; rejected;}
+}

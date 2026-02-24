@@ -1189,6 +1189,9 @@ _ppocr_instance = None
 
 def _ppocr_worker(image_path, result_queue):
     """Worker for subprocess-safe PaddleOCR call."""
+    # Isolate child in its own process group so PaddlePaddle's SIGSEGV
+    # handler cannot kill the parent process group
+    os.setpgrp()
     try:
         global _ppocr_instance
         result = _ppocr_instance.ocr(image_path, cls=True)
