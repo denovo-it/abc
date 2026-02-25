@@ -3,7 +3,7 @@ digraph ABCPipeline {
     rankdir=TB;
     bgcolor="#FAFAFA";
     fontname="Helvetica";
-    label=<<B><FONT POINT-SIZE="22">A.B.C. Pipeline Flow</FONT></B><BR/><FONT POINT-SIZE="12" COLOR="#666666">AI Book Cataloguer — State Machine</FONT>>;
+    label=<<B><FONT POINT-SIZE="22">A.B.C. Pipeline Flow</FONT></B><BR/><FONT POINT-SIZE="12" COLOR="#666666">AI Book Cataloguer — State Machine</FONT><BR/><FONT POINT-SIZE="10" COLOR="#2E7D32">Person-presence reject: qualsiasi gesto (anche indici incrociati) viene rilevato</FONT>>;
     labelloc=t;
     labeljust=c;
     pad=0.5;
@@ -45,7 +45,7 @@ digraph ABCPipeline {
         label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="2">
             <TR><TD><B><FONT POINT-SIZE="14">WAITING</FONT></B></TD></TR>
             <TR><TD><FONT POINT-SIZE="9" COLOR="#444444">YOLOv8n-pose on Metis NPU</FONT></TD></TR>
-            <TR><TD><FONT POINT-SIZE="9" COLOR="#444444">Person presence (~4s = reject)</FONT></TD></TR>
+            <TR><TD><FONT POINT-SIZE="9" COLOR="#2E7D32">Presenza persona = reject (qualsiasi gesto)</FONT></TD></TR>
         </TABLE>>,
         fillcolor="#E8F5E9", color="#2E7D32", fontcolor="#1B5E20"
     ];
@@ -70,9 +70,9 @@ digraph ABCPipeline {
     ];
 
     gesture_check [
-        label=<<B>Person stays &gt;4s?</B><BR/><FONT POINT-SIZE="8">80 frames (~4s)</FONT>>,
+        label=<<B>Persona resta &gt;4s?</B><BR/><FONT POINT-SIZE="8">80 frames (~4s)</FONT><BR/><FONT POINT-SIZE="7" COLOR="#2E7D32">indici incrociati, mano aperta, ecc.</FONT>>,
         shape=diamond, fillcolor="#FCE4EC", color="#C62828",
-        height=1.0, width=2.2
+        height=1.1, width=2.4
     ];
 
     person_left [

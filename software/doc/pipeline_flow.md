@@ -33,17 +33,19 @@ The pipeline runs as a 3-state loop on the Orange Pi 5 Plus:
 
 After ACCEPT or REJECT, the pipeline loops back to WATCHING.
 
-## Reject Gesture (Person Presence)
+## Reject/Accept Detection (Person Presence)
 Uses YOLOv8n-pose on Metis NPU for person detection:
 1. Person bounding box must overlap the loading area
-2. Person must remain present for 80 consecutive frames (~4 seconds)
-3. If the person leaves before 4s (took the book), it's an accept
+2. Person must remain present for 80 consecutive frames (~4 seconds) → **REJECT**
+3. If the person leaves before 4s (took the book) → **ACCEPT**
 
-This approach was chosen because from the overhead camera, individual
-keypoint positions (wrists, elbows) are too noisy for reliable gesture
-tracking — wrist positions can jump 200-500px between frames even when
-hands are perfectly still. Person-level detection, however, is very
-reliable (0.70-0.88 confidence).
+**Obiettivo raggiunto**: il sistema rileva correttamente lo scarto indipendentemente
+dal gesto specifico — anche mostrando due indici incrociati (gesto originariamente
+pensato come trigger) viene rilevata la presenza persona e attivato il reject.
+L'approccio person-presence è più robusto di qualsiasi gesture detection perché
+non dipende da keypoint specifici (che dalla camera overhead sono troppo rumorosi,
+con salti di 200-500px tra frame anche a mani ferme). La detection a livello
+persona è invece molto affidabile (confidence 0.70-0.88).
 
 ## Hardware Usage by State
 | State | Metis NPU | CPU | Camera |
