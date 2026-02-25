@@ -1,0 +1,13 @@
+[Unit]
+Description=Raccolta diagnostica crash post-reboot (ABC pipeline)
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/orangepi/abc/software/diagnostics/collect_crash_info.sh
+User=orangepi
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
