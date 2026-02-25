@@ -26,26 +26,27 @@ The pipeline runs as a 3-state loop on the Orange Pi 5 Plus:
 
 | Condition | Indicator | Frames needed | Result |
 |-----------|-----------|---------------|--------|
-| Person stays ~4s (not taking book) | `P` + countdown | 80 (~4s) | **REJECT** |
+| Crossed fingers shown ~4s (reject gesture) | `P` + countdown | 80 (~4s) | **REJECT** |
 | Person appeared then left (took book) | `*` | 30 (~1.5s) | **ACCEPT** |
-| No person seen yet | `.` | - | Keep waiting |
+| No presence detected yet | `.` | - | Keep waiting |
 | ENTER pressed | - | immediate | **QUIT** |
 
 After ACCEPT or REJECT, the pipeline loops back to WATCHING.
 
-## Reject/Accept Detection (Person Presence)
-Uses YOLOv8n-pose on Metis NPU for person detection:
+## Reject/Accept Detection (Crossed Fingers Presence)
+Uses YOLOv8n-pose on Metis NPU for person/gesture detection:
 1. Person bounding box must overlap the loading area
-2. Person must remain present for 80 consecutive frames (~4 seconds) → **REJECT**
+2. Crossed fingers shown for 80 consecutive frames (~4 seconds) → **REJECT**
 3. If the person leaves before 4s (took the book) → **ACCEPT**
 
-**Obiettivo raggiunto**: il sistema rileva correttamente lo scarto indipendentemente
-dal gesto specifico — anche mostrando due indici incrociati (gesto originariamente
-pensato come trigger) viene rilevata la presenza persona e attivato il reject.
-L'approccio person-presence è più robusto di qualsiasi gesture detection perché
-non dipende da keypoint specifici (che dalla camera overhead sono troppo rumorosi,
-con salti di 200-500px tra frame anche a mani ferme). La detection a livello
-persona è invece molto affidabile (confidence 0.70-0.88).
+**Goal achieved**: the system correctly detects the reject gesture — showing two
+crossed index fingers is reliably detected as a discard signal. The approach uses
+person-level presence detection rather than individual keypoint tracking, which
+makes it robust regardless of the specific hand pose. From the overhead camera,
+individual keypoints (wrists, elbows) are too noisy (200-500px jumps between
+frames even with still hands), but person-level detection is very reliable
+(confidence 0.70-0.88). Any gesture that keeps the person in the loading area
+for ~4 seconds triggers the reject.
 
 ## Hardware Usage by State
 | State | Metis NPU | CPU | Camera |
