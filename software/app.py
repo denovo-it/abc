@@ -3,14 +3,14 @@
 A.B.C. Pipeline - Integrated book detection, OCR, and feedback loop.
 
 State machine:
-  WATCHING -> SCANNING -> WAITING -> WATCHING
-  (book detected)  (OCR+DB)  (removal/gesture)
+  WATCHING -> SCANNING -> FEEDBACK -> WAITING -> WATCHING
+  (book detected)  (OCR+DB)  (gesture)  (book removed)
 
 Requires:
   - Local venv activated (source venv/bin/activate)
   - RTSP camera reachable (config from .env)
   - Metis NPU connected
-  - YOLOv8-pose model compiled for gesture feedback (optional with --no-feedback)
+  - Pose model compiled for feedback (optional with --no-feedback)
 
 Usage:
   cd software
@@ -26,13 +26,31 @@ import os
 import re
 import select
 import sys
+import threading
 import time
 import warnings
+
+# Ensure X11 display is available (needed when launching via SSH)
+if not os.environ.get('DISPLAY'):
+    os.environ['DISPLAY'] = ':0'
+# Allow any user to access the local display (for SSH sessions)
+import subprocess as _sp
+try:
+    _sp.run(['xhost', '+local:'], capture_output=True, timeout=3,
+            env={**os.environ, 'DISPLAY': os.environ['DISPLAY']})
+    # Hide mouse cursor (requires unclutter)
+    _sp.Popen(['unclutter', '-idle', '0', '-root'],
+              stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+              env={**os.environ, 'DISPLAY': os.environ['DISPLAY']})
+except Exception:
+    pass
 
 # Suppress harmless warnings on Orange Pi (no CUDA/ROCm, no GLX in headless)
 os.environ.setdefault('ORT_LOG_LEVEL', '3')
 os.environ.setdefault('LIBGL_ALWAYS_SOFTWARE', '1')
 os.environ.setdefault('MESA_GL_VERSION_OVERRIDE', '3.3')
+os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '3')      # silence TFLite/MediaPipe logs
+os.environ.setdefault('GLOG_minloglevel', '2')           # silence MediaPipe C++ warnings
 warnings.filterwarnings('ignore', message='.*device_discovery.*')
 
 # Redirect stderr briefly to suppress libGL errors from OpenCV import
@@ -43,6 +61,7 @@ import cv2
 sys.stderr = _stderr_backup
 del _stderr_backup, _io
 import numpy as np
+import display
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -129,7 +148,7 @@ from axelera.app import create_inference_stream  # noqa: E402
 BOOK_CLASS_ID = 73
 PERSON_CLASS_ID = 0
 DETECTION_MODEL = 'yolov8l-coco-onnx'
-POSE_MODEL = 'yolov8npose-coco-onnx'
+MIN_BOOK_AREA_PCT = 3.0  # minimum book bbox area as % of frame (filters false positives)
 
 # ---------------------------------------------------------------------------
 # Loading area (detection region filter)
@@ -163,6 +182,67 @@ def _det_in_loading_area(det_box, loading_area):
     dx1, dy1, dx2, dy2 = det_box
     lx1, ly1, lx2, ly2 = loading_area
     return dx1 < lx2 and dx2 > lx1 and dy1 < ly2 and dy2 > ly1
+
+
+# ---------------------------------------------------------------------------
+# Empty area reference (false-positive filter)
+# ---------------------------------------------------------------------------
+
+_empty_ref = None  # grayscale crop of empty loading area
+
+
+def _load_empty_reference():
+    """Load empty area reference image from calibration."""
+    global _empty_ref
+    if _empty_ref is not None:
+        return _empty_ref
+
+    ref_path = os.path.join(_OCR_DIR, 'test_images', 'empty_reference.jpg')
+    if not os.path.exists(ref_path):
+        _empty_ref = ()  # empty tuple = not available
+        return _empty_ref
+
+    img = cv2.imread(ref_path)
+    if img is not None:
+        _empty_ref = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        print(f"  Empty area reference loaded: {_empty_ref.shape[1]}x{_empty_ref.shape[0]}px")
+    else:
+        _empty_ref = ()
+    return _empty_ref
+
+
+def _area_correlation(frame_bgr, loading_area):
+    """Compare loading area crop with empty reference.
+
+    Returns correlation (0.0-1.0) or None if reference not available.
+    High correlation = area looks empty, low = something is there.
+    """
+    ref = _load_empty_reference()
+    if not isinstance(ref, np.ndarray):
+        return None
+
+    if not loading_area:
+        return None
+
+    x1, y1, x2, y2 = loading_area
+    crop = frame_bgr[y1:y2, x1:x2]
+    if crop.size == 0:
+        return None
+
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+
+    # Resize to match reference dimensions
+    if gray.shape != ref.shape:
+        gray = cv2.resize(gray, (ref.shape[1], ref.shape[0]))
+
+    # Normalized cross-correlation
+    result = cv2.matchTemplate(gray, ref, cv2.TM_CCORR_NORMED)
+    return float(result[0][0])
+
+
+# Thresholds for area change detection
+EMPTY_THRESHOLD = 0.985   # above this = area is empty (matches reference)
+OBJECT_THRESHOLD = 0.975  # below this = something was placed in area
 
 
 # ---------------------------------------------------------------------------
@@ -207,24 +287,56 @@ def _kill_stale_metis():
 
 
 # ---------------------------------------------------------------------------
-# STATE: WATCHING - detect book via YOLOv8 on Metis NPU
+# Display helpers
 # ---------------------------------------------------------------------------
 
-def watch_for_book(rtsp_url, confidence_threshold=0.30, consecutive_needed=5,
-                   debug=False):
-    """Watch RTSP stream for a book. Returns captured BGR frame when found.
+def _collect_vis_detections(frame_result, loading_area):
+    """Extract detections from frame_result into display-friendly format.
 
-    Uses YOLOv8 object detection on Metis NPU. Requires N consecutive frames
-    with a book detection above the confidence threshold.
+    Includes all book/person detections; marks those outside loading area.
+    """
+    vis_dets = []
+    for det in frame_result.detections:
+        cid = int(det.class_id)
+        score = float(det.score)
+        box = det.box.tolist()
+        if cid not in (BOOK_CLASS_ID, PERSON_CLASS_ID):
+            continue
+        in_area = _det_in_loading_area(box, loading_area)
+        vis_dets.append({'class_id': cid, 'score': score, 'box': box,
+                         'in_area': in_area})
+    return vis_dets
+
+
+# ---------------------------------------------------------------------------
+# STATE: WATCHING - detect object in loading area via reference comparison
+# ---------------------------------------------------------------------------
+
+def watch_for_book(rtsp_url, confidence_threshold=0.40, consecutive_needed=5,
+                   debug=False):
+    """Watch RTSP stream for an object in the loading area.
+
+    Uses image correlation with empty reference to detect when something is
+    placed in the loading area.  YOLO is used only for person detection
+    (positioning vs ready).  Returns captured BGR frame (cropped to loading
+    area) when triggered.
     """
     print("\n" + "=" * 60)
-    print("  WATCHING for book...")
+    print("  WATCHING for book... (press ENTER to quit)")
     print("=" * 60)
+
+    loading_area = _load_loading_area()
+    ref = _load_empty_reference()
+    if not isinstance(ref, np.ndarray):
+        print("  ERROR: No empty_reference.jpg — run calibrate.py first")
+        return None
 
     pipeline_cfg = ax_config.PipelineConfig(
         network=DETECTION_MODEL,
         sources=[rtsp_url],
         pipe_type='gst',
+        low_latency=True,
+        rtsp_latency=100,
     )
     stream_cfg = ax_config.InferenceStreamConfig(
         timeout=10,
@@ -236,7 +348,6 @@ def watch_for_book(rtsp_url, confidence_threshold=0.30, consecutive_needed=5,
         pipeline_configs=pipeline_cfg,
     )
 
-    loading_area = _load_loading_area()
     consecutive_book = 0
     frame_count = 0
     captured_frame = None
@@ -244,30 +355,70 @@ def watch_for_book(rtsp_url, confidence_threshold=0.30, consecutive_needed=5,
 
     try:
         for frame_result in stream:
+            # Check if user pressed ENTER (non-blocking stdin poll)
+            if select.select([sys.stdin], [], [], 0)[0]:
+                sys.stdin.readline()
+                if not debug and dot_count > 0:
+                    print()
+                captured_frame = 'quit'
+                break
+
             if frame_result.image is None and frame_result.meta is None:
                 continue
 
             frame_count += 1
-            has_book = False
-            book_score = 0.0
-            person_score = 0.0
 
+            # Get raw frame
+            try:
+                frame_bgr = frame_result.image.asarray('BGR').copy()
+            except Exception:
+                continue
+
+            # --- Detect object via correlation with empty reference ---
+            corr = _area_correlation(frame_bgr, loading_area)
+            has_object = corr is not None and corr < OBJECT_THRESHOLD
+
+            # --- Detect person via YOLO (for positioning logic) ---
+            has_person = False
             for det in frame_result.detections:
                 cid = int(det.class_id)
                 score = float(det.score)
-                if not _det_in_loading_area(det.box.tolist(), loading_area):
-                    continue  # ignore detections outside loading area
-                if cid == BOOK_CLASS_ID and score >= confidence_threshold:
-                    has_book = True
-                    book_score = max(book_score, score)
-                if cid == PERSON_CLASS_ID:
-                    person_score = max(person_score, score)
+                if cid == PERSON_CLASS_ID and score >= 0.30:
+                    has_person = True
+                    break
 
-            if has_book:
+            # -- Display overlay (throttled: every 5th frame) --
+            if frame_count % 5 == 0:
+                try:
+                    vis = frame_bgr.copy()
+                    # Draw loading area
+                    if loading_area:
+                        x1, y1, x2, y2 = loading_area
+                        color = (0, 255, 0) if not has_object else (0, 200, 255)
+                        cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
+                    # Correlation info
+                    if corr is not None:
+                        corr_text = f"corr={corr:.3f} {'EMPTY' if not has_object else 'OBJECT'}"
+                        cv2.putText(vis, corr_text, (10, 60),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                    if has_object and has_person:
+                        status = "POSITIONING... (remove hand to scan)"
+                    elif has_object:
+                        status = f"WATCHING [{consecutive_book}/{consecutive_needed}] (press ENTER to quit)"
+                    else:
+                        status = "WATCHING — area empty (press ENTER to quit)"
+                    display.draw_status(vis, status,
+                                        display.COLORS['status_watching'])
+                    display.show(vis)
+                except Exception:
+                    pass
+
+            # --- Logic ---
+            if has_object and not has_person:
                 consecutive_book += 1
                 if debug:
-                    print(f"  Frame {frame_count}: book {book_score*100:.0f}%"
-                          f" person {person_score*100:.0f}%"
+                    print(f"  Frame {frame_count}: object detected"
+                          f" corr={corr:.3f}"
                           f" [{consecutive_book}/{consecutive_needed}]")
                 else:
                     sys.stdout.write('+')
@@ -275,21 +426,28 @@ def watch_for_book(rtsp_url, confidence_threshold=0.30, consecutive_needed=5,
                     dot_count += 1
 
                 if consecutive_book >= consecutive_needed:
-                    # Capture the frame
-                    try:
-                        captured_frame = frame_result.image.asarray('BGR').copy()
-                    except Exception as e:
-                        print(f"\n  Frame capture failed: {e}")
-                        consecutive_book = 0
-                        continue
+                    # Capture cropped frame (loading area only)
+                    if loading_area:
+                        x1, y1, x2, y2 = loading_area
+                        captured_frame = frame_bgr[y1:y2, x1:x2].copy()
+                    else:
+                        captured_frame = frame_bgr.copy()
                     if not debug:
-                        print()  # newline after dots
-                    print(f"  Book detected! ({book_score*100:.0f}% confidence,"
+                        print()
+                    print(f"  Object detected in loading area!"
+                          f" (corr={corr:.3f},"
                           f" {consecutive_needed} consecutive frames)")
                     break
+
+            elif has_object and has_person:
+                # Someone is positioning — wait
+                consecutive_book = 0
+                if not debug:
+                    sys.stdout.write('h')
+                    sys.stdout.flush()
+                    dot_count += 1
             else:
-                if consecutive_book > 0 and debug:
-                    print(f"  Frame {frame_count}: no book (reset)")
+                # Area empty
                 consecutive_book = 0
                 if not debug:
                     sys.stdout.write('.')
@@ -404,14 +562,19 @@ def _select_ocr_func(components, ocr_model):
 
 
 def _run_ocr_multipass(image, ocr_func, preprocessor, merge_fn, color_filters=False,
-                       debug=False):
+                       debug=False, progress_cb=None):
     """Multi-pass OCR replicating ContinuousScanner._run_ocr_multipass() logic."""
     all_pass_boxes = []
     temp_files = []
     scale = 2.0
     total_passes = 2 + (8 if color_filters else 0)
 
+    def _progress(pass_num, label):
+        if progress_cb:
+            progress_cb(pass_num / total_passes, label)
+
     # Pass 1: Upscale 2x + denoise
+    _progress(0, f"OCR Pass 1/{total_passes}")
     print(f"   Pass 1/{total_passes}: Upscale {scale:.0f}x + denoise...",
           end='', flush=True)
     upscaled = preprocessor.preprocess_for_ppocr_upscale(image, scale)
@@ -432,6 +595,7 @@ def _run_ocr_multipass(image, ocr_func, preprocessor, merge_fn, color_filters=Fa
     print(f" done ({len(boxes_upscale)} blocks)")
 
     # Pass 2: Raw image
+    _progress(1, f"OCR Pass 2/{total_passes}")
     print(f"   Pass 2/{total_passes}: Raw image...", end='', flush=True)
     temp_raw = '/tmp/pipeline_ocr_raw.jpg'
     cv2.imwrite(temp_raw, image)
@@ -444,6 +608,7 @@ def _run_ocr_multipass(image, ocr_func, preprocessor, merge_fn, color_filters=Fa
     if color_filters:
         filters = preprocessor.generate_color_filters(image)
         for i, (label, filtered) in enumerate(filters, start=3):
+            _progress(i - 1, f"OCR Pass {i}/{total_passes}")
             print(f"   Pass {i}/{total_passes}: {label}...", end='', flush=True)
             temp_f = f'/tmp/pipeline_ocr_{label}.jpg'
             cv2.imwrite(temp_f, filtered)
@@ -562,9 +727,10 @@ def _identify_book(book_info, parser, lang=None):
 
 
 def scan_book(frame, ocr_model='cpu', color_filters=False, lang=None,
-              debug=False):
+              debug=False, progress_cb=None):
     """Run the full OCR pipeline on a captured frame.
 
+    progress_cb: optional callback(progress_0_to_1, phase_text) for display.
     Returns (book_info_dict, db_result_dict).
     """
     components = _init_ocr_components(ocr_model, debug=debug)
@@ -577,13 +743,25 @@ def scan_book(frame, ocr_model='cpu', color_filters=False, lang=None,
     model_label = 'hybrid (cpu + metis)' if ocr_model == 'hybrid' else ocr_model
     print(f"\n  SCANNING ({model_label})...")
 
-    # Multi-pass OCR
+    # Calculate total steps for progress: OCR passes + correction + parse + DB
+    total_passes = 2 + (8 if color_filters else 0)
+    total_steps = total_passes + 3  # +correction +parse +DB
+
+    def _progress(step, phase_text):
+        if progress_cb:
+            progress_cb(step / total_steps, phase_text)
+
+    _progress(0, "Starting OCR...")
+
+    # Multi-pass OCR (with per-pass progress)
     text_boxes = _run_ocr_multipass(
         frame, ocr_func, preprocessor, merge_fn,
         color_filters=color_filters, debug=debug,
+        progress_cb=lambda p, t: _progress(p * total_passes, t),
     )
 
     # Fuzzy DB correction
+    _progress(total_passes, f"Correzione ({len(text_boxes)} blocchi)")
     print(f"   Fuzzy DB correction ({len(text_boxes)} blocks)...",
           end='', flush=True)
     from scan_books import TextBox
@@ -598,6 +776,7 @@ def scan_book(frame, ocr_model='cpu', color_filters=False, lang=None,
     print(" done")
 
     # Parse
+    _progress(total_passes + 1, "Analisi testo")
     print(f"   Parsing book information...", end='', flush=True)
     img_h, img_w = frame.shape[:2]
     book_info_obj = parser.parse(corrected_text_boxes, img_h, img_w, image=frame)
@@ -615,6 +794,7 @@ def scan_book(frame, ocr_model='cpu', color_filters=False, lang=None,
     improved = postprocessor.improve_result(book_dict)
 
     # Database identification
+    _progress(total_passes + 2, "Ricerca nel database")
     print(f"   Searching database...", end='', flush=True)
     db_result = _identify_book(improved, parser, lang=lang)
     if db_result['matched']:
@@ -622,6 +802,7 @@ def scan_book(frame, ocr_model='cpu', color_filters=False, lang=None,
     else:
         print(" not found")
 
+    _progress(total_steps, "Completato!")
     return improved, db_result
 
 
@@ -703,63 +884,170 @@ def display_result(book_info, db_result, book_count):
 
 
 # ---------------------------------------------------------------------------
-# STATE: FEEDBACK - person presence detection via YOLOv8-pose
+# STATE: FEEDBACK - detect crossed index fingers via MediaPipe Hands
 # ---------------------------------------------------------------------------
 
+_mp_hands = None
 
-def _detect_person_in_area(kpt_detections, loading_area=None, debug=False):
-    """Check if a person is detected in the loading area.
 
-    Returns has_person (bool).
+def _init_mediapipe_hands():
+    """Lazy-init MediaPipe Hands detector (singleton)."""
+    global _mp_hands
+    if _mp_hands is not None:
+        return _mp_hands
+
+    # Suppress noisy C++ warnings from TFLite/abseil/cpuinfo during init
+    stderr_fd = os.dup(2)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull, 2)
+    try:
+        import mediapipe as mp
+        _mp_hands = mp.solutions.hands.Hands(
+            static_image_mode=False,
+            max_num_hands=2,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.4,
+        )
+    finally:
+        os.dup2(stderr_fd, 2)
+        os.close(stderr_fd)
+        os.close(devnull)
+
+    return _mp_hands
+
+
+def _detect_crossed_fingers(frame, hands, debug=False):
+    """Detect crossed index fingers gesture using MediaPipe Hands.
+
+    Returns True if both hands are visible with index fingers extended and
+    crossing each other (forming an X shape).
+
+    MediaPipe hand landmarks:
+      5 = INDEX_FINGER_MCP (base)
+      6 = INDEX_FINGER_PIP
+      7 = INDEX_FINGER_DIP
+      8 = INDEX_FINGER_TIP
     """
-    for det in kpt_detections:
-        box = det.box.tolist()
-        if not _det_in_loading_area(box, loading_area):
-            continue
+    # MediaPipe expects RGB; suppress C++ warnings during inference
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    stderr_fd = os.dup(2)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull, 2)
+    try:
+        result = hands.process(rgb)
+    finally:
+        os.dup2(stderr_fd, 2)
+        os.close(stderr_fd)
+        os.close(devnull)
+
+    n_hands = len(result.multi_hand_landmarks) if result.multi_hand_landmarks else 0
+    if debug:
+        print(f"  [mp] hands={n_hands}", end='')
+    if n_hands < 2:
         if debug:
-            print(f"  [pose] person box={[int(v) for v in box]}"
-                  f" score={float(det.score):.2f}")
-        return True
-    return False
+            print()
+        return False
+
+    h, w = frame.shape[:2]
+    fingers = []
+
+    for hand_lms in result.multi_hand_landmarks[:2]:
+        lm = hand_lms.landmark
+
+        # Index finger landmarks (normalized 0-1)
+        mcp = lm[5]   # base
+        pip_ = lm[6]  # middle joint
+        tip = lm[8]   # tip
+
+        # Check index finger is extended: tip is further from wrist than PIP
+        wrist = lm[0]
+        tip_d = np.sqrt((tip.x - wrist.x)**2 + (tip.y - wrist.y)**2)
+        pip_d = np.sqrt((pip_.x - wrist.x)**2 + (pip_.y - wrist.y)**2)
+        extended = tip_d > pip_d * 1.1
+        if debug:
+            print(f" idx_ext={extended}({tip_d:.2f}/{pip_d:.2f})", end='')
+        if not extended:
+            continue  # finger not extended
+
+        # Store finger line (base to tip) in pixel coords
+        fingers.append({
+            'base': (mcp.x * w, mcp.y * h),
+            'tip': (tip.x * w, tip.y * h),
+        })
+
+    if debug:
+        print(f" valid_fingers={len(fingers)}")
+    if len(fingers) < 2:
+        return False
+
+    f1, f2 = fingers[0], fingers[1]
+
+    # Check tips are close together (within 15% of frame width)
+    tip_dist = np.sqrt((f1['tip'][0] - f2['tip'][0])**2 +
+                       (f1['tip'][1] - f2['tip'][1])**2)
+    close_threshold = w * 0.15
+    if tip_dist > close_threshold:
+        if debug:
+            print(f"  Tips too far: {tip_dist:.0f}px (threshold {close_threshold:.0f})")
+        return False
+
+    # Check fingers cross: the two line segments (base→tip) intersect.
+    # Use cross product to detect opposite orientations.
+    d1 = (f1['tip'][0] - f1['base'][0], f1['tip'][1] - f1['base'][1])
+    d2 = (f2['tip'][0] - f2['base'][0], f2['tip'][1] - f2['base'][1])
+    cross = d1[0] * d2[1] - d1[1] * d2[0]
+
+    # Non-parallel fingers with significant cross product = crossing
+    len1 = np.sqrt(d1[0]**2 + d1[1]**2)
+    len2 = np.sqrt(d2[0]**2 + d2[1]**2)
+    if len1 < 1 or len2 < 1:
+        return False
+
+    sin_angle = abs(cross) / (len1 * len2)
+    crossed = sin_angle > 0.3  # angle > ~17 degrees
+
+    if debug:
+        print(f"  Fingers: tips_dist={tip_dist:.0f}px"
+              f" sin_angle={sin_angle:.2f} crossed={crossed}")
+
+    return crossed
 
 
 # ---------------------------------------------------------------------------
 # STATE: WAITING - wait for removal OR detect rejection gesture
 # ---------------------------------------------------------------------------
 
-def wait_for_removal(rtsp_url, confidence_threshold=0.30, feedback=True,
-                     debug=False):
+def wait_for_removal(rtsp_url, confidence_threshold=0.40, feedback=True,
+                     debug=False, book_display_info=None):
     """Wait until the scanned book is removed from the scene.
 
-    Uses YOLOv8-pose on Metis NPU when feedback is enabled to detect person
-    presence. Falls back to YOLOv8 object detection when feedback disabled.
+    Uses YOLOv8 object detection on Metis NPU (same as WATCHING).
+    When a person is detected AND feedback is enabled, grabs the frame and
+    checks for crossed index fingers via MediaPipe (reject gesture).
 
-    Feedback mode gesture:
-      - Person stays in loading area for ~4s without taking book -> REJECT
-      - Person reaches in and leaves (took the book) -> ACCEPT
+    book_display_info: dict with 'title', 'author', 'publisher' for overlay.
 
     Exits when:
-      - Person present for reject_frames_needed consecutive frames -> 'reject'
-      - Person appears then leaves for clear_frames_needed frames -> 'continue'
+      - Crossed fingers detected (person + gesture) -> 'reject'
+      - A person appears without gesture (removing book) -> 'continue'
+      - The book disappears from the scene -> 'continue'
       - The user presses ENTER -> 'quit'
 
     Returns 'continue', 'reject', or 'quit'.
     """
     print("\n" + "=" * 60)
     if feedback:
-        print("  WAITING - Leave book ~4s to REJECT,"
-              " pick it up to ACCEPT (ENTER to quit)")
+        print("  WAITING - Person presence to REJECT, remove book to ACCEPT (press ENTER to quit)")
     else:
-        print("  WAITING - Remove book to continue (ENTER to quit)")
+        print("  WAITING - Remove book to continue (press ENTER to quit)")
     print("=" * 60)
 
-    # Use pose model when feedback enabled (gives person keypoints),
-    # otherwise use detection model (gives book + person bboxes)
-    model = POSE_MODEL if feedback else DETECTION_MODEL
     pipeline_cfg = ax_config.PipelineConfig(
-        network=model,
+        network=DETECTION_MODEL,
         sources=[rtsp_url],
         pipe_type='gst',
+        low_latency=True,
+        rtsp_latency=100,
     )
     stream_cfg = ax_config.InferenceStreamConfig(
         timeout=10,
@@ -772,20 +1060,15 @@ def wait_for_removal(rtsp_url, confidence_threshold=0.30, feedback=True,
     )
 
     loading_area = _load_loading_area()
-    consecutive_clear = 0
+    grace_frames = 80          # ~4s grace period to show result before accepting
     consecutive_person = 0
-    clear_frames_needed = 30    # ~1.5s at ~20fps — person gone = accept
-    reject_frames_needed = 80   # ~4s at ~20fps — person stays = reject
+    REJECT_FRAMES = 30         # ~1.5s of person presence → reject
+    consecutive_gone = 0
+    GONE_FRAMES_NEEDED = 15    # ~0.75s confirmation that book is really gone
     frame_count = 0
     dot_count = 0
-    person_was_seen = False
     result = 'continue'
-
-    if debug:
-        cv2.namedWindow("WAITING - Debug Preview", cv2.WINDOW_NORMAL)
-        cv2.setWindowProperty("WAITING - Debug Preview",
-                              cv2.WND_PROP_FULLSCREEN,
-                              cv2.WINDOW_FULLSCREEN)
+    wait_vis_base = None  # cached base frame for smooth bar updates
 
     try:
         for frame_result in stream:
@@ -802,174 +1085,118 @@ def wait_for_removal(rtsp_url, confidence_threshold=0.30, feedback=True,
 
             frame_count += 1
 
-            if feedback:
-                # --- Pose model path: person detection in loading area ---
-                kpt_dets = frame_result.keypoint_detections
-                has_person = _detect_person_in_area(
-                    kpt_dets, loading_area=loading_area, debug=debug)
-            else:
-                # --- Detection model path: object detections ---
-                has_person = False
-                has_book = False
-                for det in frame_result.detections:
-                    cid = int(det.class_id)
-                    score = float(det.score)
-                    if not _det_in_loading_area(det.box.tolist(), loading_area):
-                        continue
-                    if cid == BOOK_CLASS_ID and score >= confidence_threshold:
-                        has_book = True
-                    if cid == PERSON_CLASS_ID and score >= 0.30:
-                        has_person = True
+            # Get raw frame
+            try:
+                frame_bgr = frame_result.image.asarray('BGR').copy()
+            except Exception:
+                continue
 
-            if has_person:
-                person_was_seen = True
+            # --- Detect object via correlation ---
+            corr = _area_correlation(frame_bgr, loading_area)
+            has_object = corr is not None and corr < OBJECT_THRESHOLD
+            is_empty = corr is not None and corr >= EMPTY_THRESHOLD
 
-            # Debug preview window
-            if debug:
-                try:
-                    frame_bgr = frame_result.image.asarray('BGR')
-                    preview = frame_bgr.copy()
-
-                    # Draw loading area (green rectangle)
-                    if loading_area:
-                        lx1, ly1, lx2, ly2 = loading_area
-                        cv2.rectangle(preview, (lx1, ly1), (lx2, ly2),
-                                      (0, 255, 0), 2)
-                        cv2.putText(preview, "loading area", (lx1, ly1 - 8),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                                    (0, 255, 0), 2)
-
-                    if feedback:
-                        # Draw person bboxes from pose detections
-                        for det in frame_result.keypoint_detections:
-                            box = det.box.tolist()
-                            if _det_in_loading_area(box, loading_area):
-                                bx1, by1, bx2, by2 = [int(v) for v in box]
-                                if loading_area:
-                                    bx1 = max(bx1, lx1)
-                                    by1 = max(by1, ly1)
-                                    bx2 = min(bx2, lx2)
-                                    by2 = min(by2, ly2)
-                                cv2.rectangle(preview, (bx1, by1), (bx2, by2),
-                                              (0, 0, 255), 2)
-                                score = float(det.score)
-                                cv2.putText(preview, f"person {score:.0%}",
-                                            (bx1, by1 - 8),
-                                            cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                                            (0, 0, 255), 2)
-                    else:
-                        # Draw YOLO detections (no-feedback mode)
-                        for det in frame_result.detections:
-                            cid = int(det.class_id)
-                            score = float(det.score)
-                            box = det.box.tolist()
-                            if not _det_in_loading_area(box, loading_area):
-                                continue
-                            bx1, by1, bx2, by2 = [int(v) for v in box]
-                            if loading_area:
-                                bx1 = max(bx1, lx1)
-                                by1 = max(by1, ly1)
-                                bx2 = min(bx2, lx2)
-                                by2 = min(by2, ly2)
-                            if cid == BOOK_CLASS_ID and score >= confidence_threshold:
-                                cv2.rectangle(preview, (bx1, by1), (bx2, by2),
-                                              (255, 180, 0), 2)
-                                cv2.putText(preview, f"book {score:.0%}",
-                                            (bx1, by1 - 8),
-                                            cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                                            (255, 180, 0), 2)
-                            elif cid == PERSON_CLASS_ID and score >= 0.30:
-                                cv2.rectangle(preview, (bx1, by1), (bx2, by2),
-                                              (0, 0, 255), 2)
-                                cv2.putText(preview, f"person {score:.0%}",
-                                            (bx1, by1 - 8),
-                                            cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                                            (0, 0, 255), 2)
-
-                    # Status overlay
-                    status = "WAITING"
-                    if feedback and has_person and person_was_seen:
-                        secs = (reject_frames_needed - consecutive_person) / 20.0
-                        status = f"REJECT in {secs:.1f}s [{consecutive_person}/{reject_frames_needed}]"
-                        status_color = (0, 0, 255)
-                    elif has_person:
-                        status = "PERSON"
-                        status_color = (0, 165, 255)
-                    elif person_was_seen:
-                        status = f"PERSON LEFT [{consecutive_clear}/{clear_frames_needed}]"
-                        status_color = (0, 200, 0)
-                    else:
-                        status_color = (200, 200, 200)
-
-                    cv2.putText(preview, status, (10, 30),
-                                cv2.FONT_HERSHEY_SIMPLEX, 1.0,
-                                status_color, 2)
-
-                    cv2.imshow("WAITING - Debug Preview", preview)
-                    cv2.waitKey(1)
-                except Exception:
-                    pass  # display errors should not break the loop
-
-            if feedback and has_person:
-                # Person present in loading area — count toward reject
-                consecutive_person += 1
-                consecutive_clear = 0
-                if not debug:
-                    # Show countdown every 20 frames (~1s)
-                    if consecutive_person % 20 == 0:
-                        secs_left = (reject_frames_needed - consecutive_person) / 20.0
-                        sys.stdout.write(f'[{secs_left:.1f}s]')
-                    else:
-                        sys.stdout.write('P')
-                    sys.stdout.flush()
-                    dot_count += 1
-                else:
-                    secs_left = (reject_frames_needed - consecutive_person) / 20.0
-                    print(f"  Frame {frame_count}: person present"
-                          f" [{consecutive_person}/{reject_frames_needed}]"
-                          f" ({secs_left:.1f}s to reject)")
-
-                if consecutive_person >= reject_frames_needed:
-                    if not debug and dot_count > 0:
-                        print()
-                    print("  Book not taken — REJECTED!")
-                    result = 'reject'
+            # --- Detect person via YOLO ---
+            has_person = False
+            for det in frame_result.detections:
+                cid = int(det.class_id)
+                score = float(det.score)
+                if cid == PERSON_CLASS_ID and score >= 0.30:
+                    has_person = True
                     break
 
+            # -- Display overlay --
+            try:
+                if frame_count % 5 == 0:
+                    wait_vis_base = frame_bgr.copy()
+                    if loading_area:
+                        x1, y1, x2, y2 = loading_area
+                        cv2.rectangle(wait_vis_base, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    if book_display_info:
+                        display.draw_result_box(
+                            wait_vis_base,
+                            book_display_info.get('title', ''),
+                            book_display_info.get('author', ''),
+                            book_display_info.get('publisher', ''))
+                    display.draw_status(wait_vis_base, "WAITING",
+                                        display.COLORS['status_waiting'])
+                vis_frame = wait_vis_base.copy() if wait_vis_base is not None else frame_bgr.copy()
+                # Reject bar when person detected
+                if has_person and consecutive_person > 0:
+                    ratio = 1.0 - consecutive_person / REJECT_FRAMES
+                    display.draw_countdown_bar(vis_frame, ratio, mode='reject')
+                # Accept bar when area clearing
+                elif is_empty and consecutive_gone > 0:
+                    ratio = 1.0 - consecutive_gone / GONE_FRAMES_NEEDED
+                    display.draw_countdown_bar(vis_frame, ratio, mode='accept')
+                display.show(vis_frame)
+            except Exception:
+                pass
+
+            # Grace period: show result but don't act yet
+            in_grace = frame_count <= grace_frames
+            if in_grace:
+                if not debug:
+                    sys.stdout.write('_')
+                    sys.stdout.flush()
+                    dot_count += 1
+                    if dot_count >= 80:
+                        print()
+                        dot_count = 0
+                continue
+
+            # --- Post-grace logic ---
+
+            # Person detected → reject countdown
+            if has_person:
+                consecutive_person += 1
+                consecutive_gone = 0
+                if debug:
+                    print(f"  Frame {frame_count}: person"
+                          f" [{consecutive_person}/{REJECT_FRAMES}]")
+                else:
+                    sys.stdout.write('P')
+                    sys.stdout.flush()
+                    dot_count += 1
+
+                if consecutive_person >= REJECT_FRAMES:
+                    if not debug and dot_count > 0:
+                        print()
+                    print("  Person detected — REJECTED")
+                    result = 'reject'
+                    break
             else:
                 consecutive_person = 0
 
-                if feedback:
-                    # Pose model: person leaves after being seen = accept
-                    scene_changed = person_was_seen and not has_person
+            # Area empty (matches reference) → accept countdown
+            if is_empty:
+                consecutive_gone += 1
+                if debug:
+                    print(f"  Frame {frame_count}: area empty"
+                          f" corr={corr:.3f}"
+                          f" [{consecutive_gone}/{GONE_FRAMES_NEEDED}]")
                 else:
-                    # Detection model: person OR book removal = accept
-                    scene_changed = has_person or not has_book
+                    sys.stdout.write('*')
+                    sys.stdout.flush()
+                    dot_count += 1
 
-                if scene_changed:
-                    consecutive_clear += 1
-                    if debug:
-                        print(f"  Frame {frame_count}: scene changed"
-                              f" [{consecutive_clear}/{clear_frames_needed}]")
-                    else:
-                        sys.stdout.write('*')
-                        sys.stdout.flush()
-                        dot_count += 1
+                if consecutive_gone >= GONE_FRAMES_NEEDED:
+                    if not debug and dot_count > 0:
+                        print()
+                    print("  Book removed, accepting...")
+                    break
+            else:
+                consecutive_gone = 0
 
-                    if consecutive_clear >= clear_frames_needed:
-                        if not debug and dot_count > 0:
-                            print()
-                        print(f"  Person left, resuming...")
-                        break
-                else:
-                    consecutive_clear = 0
-                    if not debug:
-                        sys.stdout.write('.')
-                        sys.stdout.flush()
-                        dot_count += 1
-                        if dot_count >= 80:
-                            print()
-                            dot_count = 0
+            # Idle (object still there, no person)
+            if has_object and not has_person:
+                if not debug:
+                    sys.stdout.write('.')
+                    sys.stdout.flush()
+                    dot_count += 1
+                    if dot_count >= 80:
+                        print()
+                        dot_count = 0
 
     except KeyboardInterrupt:
         if not debug and dot_count > 0:
@@ -982,8 +1209,6 @@ def wait_for_removal(rtsp_url, confidence_threshold=0.30, feedback=True,
         print("  Continuing...")
     finally:
         stream.stop()
-        if debug:
-            cv2.destroyAllWindows()
 
     return result
 
@@ -1007,7 +1232,7 @@ def run_pipeline(args):
     print(f"  Confidence:    >= {args.confidence*100:.0f}%")
     print(f"  Consecutive:   {args.consecutive} frames")
     print(f"  Color filters: {'Yes' if args.color_filters else 'No'}")
-    feedback_desc = "Leave book ~4s = reject (YOLOv8-pose on Metis)" if not args.no_feedback else "No (auto-accept)"
+    feedback_desc = "Crossed fingers (MediaPipe Hands)" if not args.no_feedback else "No (auto-accept)"
     print(f"  Feedback:      {feedback_desc}")
     print(f"  Camera:        {_rtsp_url_safe(rtsp_url)}")
     loading_area = _load_loading_area()
@@ -1019,12 +1244,38 @@ def run_pipeline(args):
         print(f"  Loading area:  FULL FRAME (no calibration)")
     print("=" * 60)
 
+    # Initialize display window early so splash is visible during loading
+    display.init_window()
+
+    use_feedback = not args.no_feedback
+    loading_steps = [
+        ("Metis NPU cleanup", False),
+        ("OCR components", False),
+        ("PP-OCR models", False),
+    ]
+    if args.ocr_model in ('metis', 'hybrid'):
+        loading_steps.append(("Metis OCR model", False))
+
+    def _splash(status, step_idx=None):
+        if step_idx is not None:
+            loading_steps[step_idx] = (loading_steps[step_idx][0], True)
+        display.draw_splash(status, loading_steps)
+
+    _splash("Starting up...")
+
+    _splash("Cleaning up Metis...")
     _kill_stale_metis()
+    _splash("Metis cleanup done", step_idx=0)
 
     # Pre-initialize OCR components
+    _splash("Loading OCR components...")
     print("\n  Initializing OCR...")
     _init_ocr_components(args.ocr_model, debug=args.debug)
     print("  OCR ready.\n")
+    # Mark remaining OCR steps as done
+    for i in range(1, len(loading_steps)):
+        loading_steps[i] = (loading_steps[i][0], True)
+    _splash("Ready!")
 
     book_count = 0
 
@@ -1032,7 +1283,6 @@ def run_pipeline(args):
         while True:
             # --- WATCHING ---
             gc.collect()
-            time.sleep(0.5)
 
             frame = watch_for_book(
                 rtsp_url,
@@ -1045,30 +1295,89 @@ def run_pipeline(args):
                 print("  No frame captured, retrying...")
                 continue
 
-            # --- SCANNING ---
-            gc.collect()
-            time.sleep(0.5)
+            if isinstance(frame, str) and frame == 'quit':
+                print(f"\n  Books scanned: {book_count}")
+                print("  Pipeline stopped.\n")
+                return
 
-            book_info, db_result = scan_book(
-                frame,
-                ocr_model=args.ocr_model,
-                color_filters=args.color_filters,
-                lang=args.lang,
-                debug=args.debug,
-            )
+            # --- SCANNING ---
+
+            # Run OCR in background thread, animate hourglass in main thread
+            scan_state = {'progress': 0.0, 'phase': 'Starting...',
+                          'done': False, 'result': None}
+
+            def _scan_progress(progress, phase_text):
+                scan_state['progress'] = progress
+                scan_state['phase'] = phase_text
+
+            def _scan_worker():
+                try:
+                    result = scan_book(
+                        frame,
+                        ocr_model=args.ocr_model,
+                        color_filters=args.color_filters,
+                        lang=args.lang,
+                        debug=args.debug,
+                        progress_cb=_scan_progress,
+                    )
+                    scan_state['result'] = result
+                finally:
+                    scan_state['done'] = True
+
+            scan_thread = threading.Thread(target=_scan_worker, daemon=True)
+            scan_thread.start()
+
+            # Animate hourglass while OCR runs
+            scan_frame_base = frame.copy()
+            tick = 0
+            while not scan_state['done']:
+                tick += 1
+                vis = scan_frame_base.copy()
+                display.draw_hourglass(vis, tick=tick,
+                                       progress=scan_state['progress'],
+                                       phase_text=scan_state['phase'])
+                display.draw_status(vis, "SCANNING",
+                                    display.COLORS['status_scanning'])
+                display.show(vis)
+                time.sleep(0.05)  # ~20fps animation
+
+            scan_thread.join()
+            book_info, db_result = scan_state['result']
 
             book_count += 1
             display_result(book_info, db_result, book_count)
 
+            # Show result on display
+            MIN_DB_CONFIDENCE = 0.60
+            db_matched = (db_result and db_result.get('matched')
+                          and db_result.get('book'))
+            db_confident = (db_matched
+                            and db_result['match_confidence'] >= MIN_DB_CONFIDENCE)
+            if db_confident:
+                book = db_result['book']
+                bdi = {'title': book.title, 'author': book.author,
+                       'publisher': book.publisher or ''}
+            else:
+                bdi = {'title': book_info['title'],
+                       'author': book_info['author'],
+                       'publisher': book_info['publisher']}
+
+            result_display = frame.copy()
+            display.draw_result_box(result_display, bdi['title'],
+                                    bdi['author'], bdi['publisher'])
+            display.draw_status(result_display, "RESULT",
+                                display.COLORS['status_scanning'])
+            display.show(result_display)
+
             # --- WAITING (with integrated gesture detection) ---
             gc.collect()
-            time.sleep(0.5)
 
             wait_result = wait_for_removal(
                 rtsp_url,
                 confidence_threshold=args.confidence,
                 feedback=not args.no_feedback,
                 debug=args.debug,
+                book_display_info=bdi,
             )
 
             if wait_result == 'quit':
@@ -1086,6 +1395,8 @@ def run_pipeline(args):
         print("\n\n  Interrupted by user")
         print(f"  Books scanned: {book_count}")
         print("  Pipeline stopped.\n")
+    finally:
+        display.destroy()
 
 
 # ---------------------------------------------------------------------------
@@ -1103,10 +1414,10 @@ def main():
         '--lang', choices=['en', 'it'], default=None,
         help='Language filter for DB search')
     parser.add_argument(
-        '--confidence', type=float, default=0.30,
-        help='Book detection confidence threshold (default: 0.30)')
+        '--confidence', type=float, default=0.40,
+        help='Book detection confidence threshold (default: 0.40)')
     parser.add_argument(
-        '--consecutive', type=int, default=5,
+        '--consecutive', type=int, default=15,
         help='Consecutive frames to confirm book detection (default: 5)')
     parser.add_argument(
         '--color-filters', action='store_true',

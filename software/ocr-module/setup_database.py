@@ -79,7 +79,7 @@ class BookDatabase:
         self._imprints_cache = None
         self._has_fts_cache = None
         # Persistent read-only connection for queries (avoids repeated connect on 18GB DB)
-        self._read_conn = sqlite3.connect(self.db_path)
+        self._read_conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._read_conn.execute("PRAGMA query_only = ON")
         self._read_conn.execute("PRAGMA mmap_size = 268435456")  # 256MB mmap for faster reads
         self._read_conn.execute("PRAGMA case_sensitive_like = ON")  # Enable index use for LIKE prefix%
