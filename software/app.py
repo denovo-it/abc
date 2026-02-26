@@ -605,6 +605,9 @@ def watch_for_book(rtsp_url, confidence_threshold=0.40, consecutive_needed=5,
                         # Restart WATCHING with new calibration
                         captured_frame = None
                         break
+                    # QR code visible = someone is holding something in front
+                    # of the camera, don't count as book detection
+                    consecutive_book = 0
 
             # -- Display overlay (throttled: every 5th frame) --
             if frame_count % 5 == 0:
@@ -647,6 +650,12 @@ def watch_for_book(rtsp_url, confidence_threshold=0.40, consecutive_needed=5,
                     dot_count += 1
 
                 if consecutive_book >= consecutive_needed:
+                    # Last-moment QR check: avoid scanning a QR code
+                    qr_check = _check_qr_command(frame_bgr)
+                    if qr_check is not None:
+                        consecutive_book = 0
+                        _diag_log(f"QR detected at trigger, scan aborted: {qr_check}")
+                        continue
                     # Capture cropped frame (loading area only)
                     if loading_area:
                         x1, y1, x2, y2 = loading_area
