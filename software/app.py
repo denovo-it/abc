@@ -79,7 +79,8 @@ display.draw_splash("Starting up...")
 # QR code detection & diagnostics
 # ---------------------------------------------------------------------------
 
-_qr_detector = cv2.QRCodeDetector()
+from pyzbar import pyzbar as _pyzbar
+
 _diag_mode = False
 _diag_lines = deque(maxlen=25)
 
@@ -95,9 +96,10 @@ def _diag_log(msg):
 def _check_qr_command(frame_bgr):
     """Check for QR code in frame, return recognized command or None."""
     try:
-        data, _, _ = _qr_detector.detectAndDecode(frame_bgr)
-        if data:
-            cmd = data.strip().upper()
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        results = _pyzbar.decode(gray, symbols=[_pyzbar.ZBarSymbol.QRCODE])
+        for r in results:
+            cmd = r.data.decode('utf-8', errors='ignore').strip().upper()
             if cmd in ('DIAG ON', 'DIAG OFF', 'SHUTDOWN NOW', 'CANCEL',
                        'CALIBRATE'):
                 return cmd
@@ -165,17 +167,35 @@ def _handle_calibration():
 
     from calibrate import detect_x_markers, find_rectangle_from_markers, save_calibration
 
-    # Show status on screen
-    frame = np.zeros((display.SCREEN_H, display.SCREEN_W, 3), dtype=np.uint8)
-    cv2.putText(frame, "CALIBRATING...", (200, 280),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 165, 255), 3, cv2.LINE_AA)
-    cv2.putText(frame, "Keep X markers visible", (220, 340),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 1, cv2.LINE_AA)
-    display.show(frame)
-
     try:
-        # Capture frame from camera
         rtsp_url = _rtsp_url()
+
+        # Wait for area to be clear (no hand/QR code)
+        frame = np.zeros((display.SCREEN_H, display.SCREEN_W, 3), dtype=np.uint8)
+        cv2.putText(frame, "CALIBRATING", (280, 250),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 165, 255), 3, cv2.LINE_AA)
+        cv2.putText(frame, "Remove QR code and clear the area", (140, 320),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 1, cv2.LINE_AA)
+        cv2.putText(frame, "Keep X markers visible", (200, 370),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 1, cv2.LINE_AA)
+
+        # Countdown 5s to give time to clear area
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            remaining = int(deadline - time.time()) + 1
+            vis = frame.copy()
+            cv2.putText(vis, str(remaining), (480, 470),
+                        cv2.FONT_HERSHEY_SIMPLEX, 2.0, (255, 255, 255), 4, cv2.LINE_AA)
+            display.show(vis)
+            time.sleep(0.2)
+
+        # Show capturing message
+        frame2 = np.zeros((display.SCREEN_H, display.SCREEN_W, 3), dtype=np.uint8)
+        cv2.putText(frame2, "Capturing...", (340, 300),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 165, 255), 2, cv2.LINE_AA)
+        display.show(frame2)
+
+        # Capture frame from camera
         cap = cv2.VideoCapture(rtsp_url)
         if not cap.isOpened():
             _diag_log("CALIBRATION FAILED: cannot connect to camera")
@@ -579,6 +599,7 @@ def watch_for_book(rtsp_url, confidence_threshold=0.40, consecutive_needed=5,
     frame_count = 0
     captured_frame = None
     dot_count = 0
+    cooldown_until = 0
 
     try:
         for frame_result in stream:
@@ -627,7 +648,8 @@ def watch_for_book(rtsp_url, confidence_threshold=0.40, consecutive_needed=5,
                         _diag_mode = False
                     elif qr_cmd == 'SHUTDOWN NOW':
                         _last_frame = [frame_bgr]
-                        _handle_shutdown(rtsp_url, lambda: _last_frame[0])
+                        if not _handle_shutdown(rtsp_url, lambda: _last_frame[0]):
+                            cooldown_until = time.time() + 3
                     elif qr_cmd == 'CALIBRATE':
                         _handle_calibration()
                         # Restart WATCHING with new calibration
@@ -666,7 +688,27 @@ def watch_for_book(rtsp_url, confidence_threshold=0.40, consecutive_needed=5,
                     pass
 
             # --- Logic ---
-            if has_object and not has_person:
+            if has_object and not has_person and time.time() >= cooldown_until:
+                # Check QR every frame during object buildup
+                if consecutive_book > 0:
+                    qr_mid = _check_qr_command(frame_bgr)
+                    if qr_mid is not None:
+                        _diag_log(f"QR during buildup, reset: {qr_mid}")
+                        consecutive_book = 0
+                        # Process the QR command
+                        if qr_mid == 'DIAG ON':
+                            _diag_mode = True
+                        elif qr_mid == 'DIAG OFF':
+                            _diag_mode = False
+                        elif qr_mid == 'SHUTDOWN NOW':
+                            _last_frame = [frame_bgr]
+                            if not _handle_shutdown(rtsp_url, lambda: _last_frame[0]):
+                                cooldown_until = time.time() + 3
+                        elif qr_mid == 'CALIBRATE':
+                            _handle_calibration()
+                            captured_frame = None
+                            break
+                        continue
                 consecutive_book += 1
                 if debug:
                     print(f"  Frame {frame_count}: object detected"
@@ -1378,7 +1420,8 @@ def wait_for_removal(rtsp_url, confidence_threshold=0.40, feedback=True,
                         _diag_mode = False
                     elif qr_cmd == 'SHUTDOWN NOW':
                         _last_frame = [frame_bgr]
-                        _handle_shutdown(rtsp_url, lambda: _last_frame[0])
+                        if not _handle_shutdown(rtsp_url, lambda: _last_frame[0]):
+                            cooldown_until = time.time() + 3
                     elif qr_cmd == 'CALIBRATE':
                         _handle_calibration()
 
