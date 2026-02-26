@@ -157,19 +157,19 @@ During manual scanning:
 software/
   app.py                # Main pipeline (state machine)
   .env                  # Configuration (from doc/env_example.txt)
-  start_abc.sh          # Autostart wrapper (waits for X11)
   results.csv           # Scan results log (not in git)
   config/
     loading_area.txt    # Calibration coordinates
     empty_reference.jpg # Empty area reference for correlation
     calibration_preview.jpg  # Visual preview of calibrated area
-    books.db            # SQLite database (18GB, symlinked, not in git)
+    books.db            # SQLite database (18GB, not in git)
   tools/
     calibrate.py        # Camera calibration (X marker detection)
     display.py          # Fullscreen UI overlays and rendering
     config.py           # .env loader and RTSP configuration
     scan_books.py       # OCR engine with preprocessing and parsing
     setup_database.py   # Database management and Open Library import
+    start_abc.sh        # Autostart wrapper (waits for X11)
     doc/
       README.md         # This file (OCR documentation)
   doc/
