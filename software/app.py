@@ -1657,8 +1657,8 @@ def main():
         '--consecutive', type=int, default=15,
         help='Consecutive frames to confirm book detection (default: 5)')
     parser.add_argument(
-        '--no-color-filters', dest='color_filters', action='store_false', default=True,
-        help='Disable color filter OCR passes (faster, less accurate on artistic covers)')
+        '--color-filters', action='store_true',
+        help='Enable extra OCR passes with color filters (slower, better on artistic covers)')
     parser.add_argument(
         '--no-feedback', action='store_true',
         help='Skip gesture feedback phase (auto-accept)')
