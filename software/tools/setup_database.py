@@ -70,7 +70,7 @@ class BookDatabase:
     Used by scan_books.py for OCR validation and fuzzy matching.
     """
 
-    def __init__(self, db_path: str = "books.db"):
+    def __init__(self, db_path: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "config", "books.db")):
         self.db_path = db_path
         self._init_db()
         # Caches for fast lookups

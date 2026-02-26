@@ -55,7 +55,7 @@ def _load_logo():
     if _logo_img is not None:
         return _logo_img
     import os
-    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+    logo_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                              'doc', 'denovo-logo.png')
     if os.path.exists(logo_path):
         _logo_img = cv2.imread(logo_path, cv2.IMREAD_UNCHANGED)

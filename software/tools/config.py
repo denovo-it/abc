@@ -3,8 +3,19 @@
 import os
 
 
-def load_env_file(env_file='.env'):
-    """Load environment variables from .env file if it exists"""
+def load_env_file(env_file=None):
+    """Load environment variables from .env file if it exists.
+
+    If no path given, looks in current directory then parent directory.
+    """
+    if env_file is None:
+        # Try current dir, then parent dir (for when called from tools/)
+        for candidate in ['.env', os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.env')]:
+            if os.path.exists(candidate):
+                env_file = candidate
+                break
+        if env_file is None:
+            return
     if os.path.exists(env_file):
         with open(env_file, 'r') as f:
             for line in f:

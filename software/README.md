@@ -35,7 +35,7 @@ Only one model uses the Metis NPU at a time. Each state releases the device befo
 
 | Module | Path | What is used |
 |--------|------|-------------|
-| **ocr-module** | `./ocr-module/` | `scan_books.py` (OCR engine, preprocessor, parser, post-processor), `setup_database.py` (BookDatabase), `books.db` (18GB SQLite) |
+| **tools** | `./tools/` | `scan_books.py` (OCR engine), `display.py` (fullscreen UI), `calibrate.py` (camera calibration), `config.py` (env loader), `setup_database.py` (BookDatabase) |
 | **voyager-sdk** | `./voyager-sdk/` | Axelera SDK framework, GStreamer pipeline, compiled models in `build/` |
 
 ### External (system)
@@ -70,17 +70,35 @@ Key packages (full list in `pipeline-requirements.txt`):
 ```bash
 cd software
 
-# 1. Activate venv
-source venv/bin/activate
+# 1. Configure environment (REQUIRED first step)
+cp doc/env_example.txt .env
+# Edit .env with your RTSP camera credentials and settings
 
-# 2. Configure RTSP camera credentials
-cp ./ocr-module/.env .env
-# Edit .env with your RTSP_USERNAME, RTSP_PASSWORD, RTSP_IP
+# 2. Activate venv
+source venv/bin/activate
 
 # 3. (Optional) Compile pose model for gesture feedback (~10-30 min)
 cd voyager-sdk && source venv/bin/activate
 ./inference.py yolov8lpose-coco-onnx media/traffic1_1080p.mp4 --frames 1 --no-display
 ```
+
+## Calibration
+
+Before first use, calibrate the loading area by placing 4 X markers at the corners:
+
+```bash
+source venv/bin/activate
+python3 tools/calibrate.py
+```
+
+This detects the X markers, saves the loading area coordinates to `config/loading_area.txt`,
+and captures an empty area reference image (`config/empty_reference.jpg`) for book detection.
+
+Options:
+- `--debug` — Save intermediate debug images
+- `--no-display` — Skip GUI preview (headless mode)
+
+Calibration can also be triggered at runtime via the `CALIBRATE` QR code command.
 
 ## Usage
 

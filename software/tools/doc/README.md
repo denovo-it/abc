@@ -154,24 +154,36 @@ During manual scanning:
 ## File Structure
 
 ```
-ocr-module/
-  calibrate.py          # Camera calibration (X marker detection)
-  scan_books.py         # Main scanner with OCR pipeline
-  setup_database.py     # Database management and Open Library import
-  books.db              # SQLite database (18GB, not in git)
-  ocr_results.csv       # Scan results log
-  test_images/
+software/
+  app.py                # Main pipeline (state machine)
+  .env                  # Configuration (from doc/env_example.txt)
+  start_abc.sh          # Autostart wrapper (waits for X11)
+  results.csv           # Scan results log (not in git)
+  config/
     loading_area.txt    # Calibration coordinates
-    book_*.jpg          # Captured book images
+    empty_reference.jpg # Empty area reference for correlation
+    calibration_preview.jpg  # Visual preview of calibrated area
+    books.db            # SQLite database (18GB, symlinked, not in git)
+  tools/
+    calibrate.py        # Camera calibration (X marker detection)
+    display.py          # Fullscreen UI overlays and rendering
+    config.py           # .env loader and RTSP configuration
+    scan_books.py       # OCR engine with preprocessing and parsing
+    setup_database.py   # Database management and Open Library import
+    doc/
+      README.md         # This file (OCR documentation)
   doc/
-    README.md           # This file
+    env_example.txt     # Environment configuration template
+    flow/               # Pipeline flow documentation
+    qr-code/            # QR code images for runtime commands
+  voyager-sdk/          # Axelera SDK (external fork, do not modify)
 ```
 
 ---
 
 ## Troubleshooting
 
-**"Loading area not calibrated"** - Run `python3 calibrate.py` first
+**"Loading area not calibrated"** - Run `python3 tools/calibrate.py` first
 
 **"Metis unavailable"** - System falls back to CPU automatically. Check that
 Axelera device is connected and driver loaded (`lsmod | grep axl`)

@@ -1,7 +1,7 @@
-# OCR Test - Configuration
-# Copy this file to .env and configure
+# A.B.C. Configuration
+# Copy this file to software/.env and fill in your values.
 
-# RTSP Camera (SONOFF CAM S2)
+# RTSP Camera
 RTSP_USERNAME=your_username
 RTSP_PASSWORD=your_password
 RTSP_IP=192.168.x.x

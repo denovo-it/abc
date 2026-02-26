@@ -63,6 +63,12 @@ import cv2
 sys.stderr = _stderr_backup
 del _stderr_backup, _io
 import numpy as np
+
+# Add tools/ to sys.path early (display, calibrate, config live there)
+_tools_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tools')
+if _tools_path not in sys.path:
+    sys.path.insert(0, _tools_path)
+
 import display
 
 # Show splash screen immediately (before heavy imports)
@@ -186,7 +192,7 @@ def _handle_calibration():
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = _SCRIPT_DIR  # pipeline.py lives at software/ level
-_OCR_DIR = os.path.join(_PROJECT_ROOT, 'ocr-module')
+_TOOLS_DIR = os.path.join(_PROJECT_ROOT, 'tools')
 _SDK_DIR = os.path.join(_PROJECT_ROOT, 'voyager-sdk')
 _CONFIG_DIR = os.path.join(_PROJECT_ROOT, 'config')
 
@@ -247,9 +253,7 @@ def _bootstrap_axelera_env():
             sys.path.insert(0, p)
 
 
-# Add ocr-module to sys.path FIRST (needed by _load_env -> config)
-if _OCR_DIR not in sys.path:
-    sys.path.insert(0, _OCR_DIR)
+# tools/ already in sys.path (added before display import)
 
 # Load .env and bootstrap SDK environment BEFORE any axelera imports
 _load_env(os.path.join(_SCRIPT_DIR, '.env'))
@@ -277,7 +281,7 @@ _loading_area = None
 
 
 def _load_loading_area():
-    """Load calibrated loading area from ocr-module config."""
+    """Load calibrated loading area from tools/ config."""
     global _loading_area
     if _loading_area is not None:
         return _loading_area
@@ -622,14 +626,14 @@ _ocr_components = None
 
 
 def _init_ocr_components(ocr_model, debug=False):
-    """Import and initialize OCR components from ocr-module."""
+    """Import and initialize OCR components from tools/."""
     global _ocr_components
     if _ocr_components is not None:
         return _ocr_components
 
     print("  Loading OCR components...")
 
-    # Import from ocr-module
+    # Import from tools/
     from scan_books import (
         BookCoverPreprocessor,
         BookCoverParser,

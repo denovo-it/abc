@@ -382,11 +382,9 @@ class BookCoverParser:
         self.book_db = None
         if BOOK_DB_AVAILABLE:
             try:
-                # Look in config/ first, then fall back to ocr-module/
+                # Look in config/ first, then fall back to tools/
                 _module_dir = os.path.dirname(os.path.abspath(__file__))
                 db_path = os.path.join(_module_dir, '..', 'config', 'books.db')
-                if not os.path.exists(db_path):
-                    db_path = os.path.join(_module_dir, 'books.db')
                 if os.path.exists(db_path):
                     self.book_db = BookDatabase(db_path)
                     if self.debug:

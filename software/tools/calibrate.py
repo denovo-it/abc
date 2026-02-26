@@ -25,11 +25,10 @@ import numpy as np
 
 # Resolve paths relative to this script's directory
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_OCR_DIR = os.path.join(_SCRIPT_DIR, 'ocr-module')
-_CONFIG_DIR = os.path.join(_SCRIPT_DIR, 'config')
+# tools/ dir is the script's own directory
+_CONFIG_DIR = os.path.join(os.path.dirname(_SCRIPT_DIR), 'config')
 
-# Add ocr-module to path for config import
-sys.path.insert(0, _OCR_DIR)
+# config is in same directory
 from config import RTSPConfig
 
 # Suppress OpenCV warnings
@@ -118,7 +117,13 @@ def show_image(image, wait_key=True):
 
 def detect_x_markers(image, debug=False):
     """
-    Detect X markers in image using blob detection.
+    Detect X markers in image using shape analysis.
+
+    Filters candidates by:
+    - Area (0.05%-1% of image)
+    - Aspect ratio (~square)
+    - Solidity (<0.65): X shapes have gaps between arms
+    - Convexity defects (>=3): X shapes have 4 indentations
 
     Returns:
         List of (x, y) coordinates of detected markers
@@ -142,41 +147,78 @@ def detect_x_markers(image, debug=False):
     # Find contours
     contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # Filter contours by area and aspect ratio
     markers = []
     h, w = image.shape[:2]
-    min_area = (h * w) * 0.0002  # 0.02% of image
+    min_area = (h * w) * 0.0005  # 0.05% of image (larger minimum)
     max_area = (h * w) * 0.01    # 1% of image
 
     debug_img = image.copy() if debug else None
 
     for i, contour in enumerate(contours):
         area = cv2.contourArea(contour)
-
         if area < min_area or area > max_area:
             continue
 
-        # Get bounding box
+        # Aspect ratio: X markers are roughly square
         x, y, w_box, h_box = cv2.boundingRect(contour)
         aspect_ratio = float(w_box) / h_box if h_box > 0 else 0
+        if not (0.6 < aspect_ratio < 1.7):
+            if debug:
+                print(f"    [{i}] area={area:.0f} REJECTED: aspect={aspect_ratio:.2f}")
+            continue
 
-        # X markers should be roughly square
-        if 0.5 < aspect_ratio < 2.0:
-            # Center of marker
-            M = cv2.moments(contour)
-            if M["m00"] > 0:
-                cx = int(M["m10"] / M["m00"])
-                cy = int(M["m01"] / M["m00"])
-                markers.append((cx, cy))
+        # Solidity: contour area / convex hull area
+        # X shapes have low solidity (~0.3-0.55) due to gaps between arms
+        # Solid blobs (keyboard keys, cables) have high solidity (>0.7)
+        hull = cv2.convexHull(contour)
+        hull_area = cv2.contourArea(hull)
+        solidity = area / hull_area if hull_area > 0 else 1.0
+        if solidity > 0.65:
+            if debug:
+                print(f"    [{i}] area={area:.0f} REJECTED: solidity={solidity:.2f}")
+            continue
 
-                if debug:
-                    cv2.circle(debug_img, (cx, cy), 10, (0, 255, 0), -1)
-                    cv2.putText(debug_img, f"{i+1}", (cx + 15, cy),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        # Convexity defects: X shapes have 4 significant indentations
+        hull_indices = cv2.convexHull(contour, returnPoints=False)
+        if len(hull_indices) < 4:
+            if debug:
+                print(f"    [{i}] area={area:.0f} REJECTED: hull_pts={len(hull_indices)}")
+            continue
+
+        defects = cv2.convexityDefects(contour, hull_indices)
+        if defects is None:
+            if debug:
+                print(f"    [{i}] area={area:.0f} REJECTED: no defects")
+            continue
+
+        # Count significant defects (depth > 15% of bounding box size)
+        min_defect_depth = max(w_box, h_box) * 0.15
+        significant_defects = sum(
+            1 for d in defects if d[0][3] / 256.0 > min_defect_depth
+        )
+        if significant_defects < 3:
+            if debug:
+                print(f"    [{i}] area={area:.0f} REJECTED: defects={significant_defects}")
+            continue
+
+        # Passed all filters — this is an X marker
+        M = cv2.moments(contour)
+        if M["m00"] > 0:
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
+            markers.append((cx, cy))
+
+            if debug:
+                print(f"    [{i}] area={area:.0f} solidity={solidity:.2f} "
+                      f"defects={significant_defects} -> ACCEPTED ({cx},{cy})")
+                cv2.circle(debug_img, (cx, cy), 10, (0, 255, 0), -1)
+                cv2.drawContours(debug_img, [contour], -1, (0, 255, 0), 2)
+                cv2.putText(debug_img, f"{len(markers)}", (cx + 15, cy),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
     if debug and debug_img is not None:
         cv2.imwrite('debug_3_markers.jpg', debug_img)
-        print(f"  Found {len(markers)} potential markers")
+        print(f"  Found {len(markers)} X markers (filtered from {len(contours)} contours)")
 
     return markers
 

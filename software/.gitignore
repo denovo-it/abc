@@ -20,10 +20,8 @@ Thumbs.db
 .vscode/
 *.swp
 
-# Diagnostics
-diagnostics/
 
 # Test images
 test_images/
-config/books.db
+config/
 results.csv
