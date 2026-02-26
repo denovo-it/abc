@@ -3,7 +3,7 @@ digraph ABCPipeline {
     rankdir=TB;
     bgcolor="#FAFAFA";
     fontname="Helvetica";
-    label=<<B><FONT POINT-SIZE="22">A.B.C. Pipeline Flow</FONT></B><BR/><FONT POINT-SIZE="12" COLOR="#666666">AI Book Cataloguer — State Machine</FONT><BR/><FONT POINT-SIZE="10" COLOR="#2E7D32">Crossed fingers reject: presence detected reliably via person-level detection</FONT>>;
+    label=<<B><FONT POINT-SIZE="22">A.B.C. Pipeline Flow</FONT></B><BR/><FONT POINT-SIZE="12" COLOR="#666666">AI Book Cataloguer — State Machine</FONT><BR/><FONT POINT-SIZE="10" COLOR="#2E7D32">Book detection via image correlation + YOLO person detection</FONT>>;
     labelloc=t;
     labeljust=c;
     pad=0.5;
@@ -20,12 +20,22 @@ digraph ABCPipeline {
     stop  [label="STOP",  shape=doublecircle, width=0.8, fixedsize=true,
            fillcolor="#333333", fontcolor="white", fontsize=10];
 
+    // === SPLASH ===
+    splash [
+        label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="2">
+            <TR><TD><B><FONT POINT-SIZE="12">SPLASH</FONT></B></TD></TR>
+            <TR><TD><FONT POINT-SIZE="9" COLOR="#444444">Load SDK, OCR models</FONT></TD></TR>
+        </TABLE>>,
+        fillcolor="#F3E5F5", color="#7B1FA2", fontcolor="#4A148C"
+    ];
+
     // === STATE: WATCHING ===
     watching [
         label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="2">
             <TR><TD><B><FONT POINT-SIZE="14">WATCHING</FONT></B></TD></TR>
-            <TR><TD><FONT POINT-SIZE="9" COLOR="#444444">YOLOv8 on Metis NPU (~45 fps)</FONT></TD></TR>
-            <TR><TD><FONT POINT-SIZE="9" COLOR="#444444">Detect book in loading area</FONT></TD></TR>
+            <TR><TD><FONT POINT-SIZE="9" COLOR="#444444">YOLOv8l on Metis NPU (~45 fps)</FONT></TD></TR>
+            <TR><TD><FONT POINT-SIZE="9" COLOR="#444444">Image correlation for book detection</FONT></TD></TR>
+            <TR><TD><FONT POINT-SIZE="8" COLOR="#1565C0">QR commands checked every ~1.5s</FONT></TD></TR>
         </TABLE>>,
         fillcolor="#E3F2FD", color="#1565C0", fontcolor="#0D47A1"
     ];
@@ -35,7 +45,8 @@ digraph ABCPipeline {
         label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="2">
             <TR><TD><B><FONT POINT-SIZE="14">SCANNING</FONT></B></TD></TR>
             <TR><TD><FONT POINT-SIZE="9" COLOR="#444444">PaddleOCR v3 (CPU/Hybrid)</FONT></TD></TR>
-            <TR><TD><FONT POINT-SIZE="9" COLOR="#444444">OCR + DB identification</FONT></TD></TR>
+            <TR><TD><FONT POINT-SIZE="9" COLOR="#444444">Multi-pass OCR + DB search</FONT></TD></TR>
+            <TR><TD><FONT POINT-SIZE="8" COLOR="#E65100">Hourglass + progress %</FONT></TD></TR>
         </TABLE>>,
         fillcolor="#FFF3E0", color="#E65100", fontcolor="#BF360C"
     ];
@@ -44,17 +55,24 @@ digraph ABCPipeline {
     waiting [
         label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="2">
             <TR><TD><B><FONT POINT-SIZE="14">WAITING</FONT></B></TD></TR>
-            <TR><TD><FONT POINT-SIZE="9" COLOR="#444444">YOLOv8n-pose on Metis NPU</FONT></TD></TR>
-            <TR><TD><FONT POINT-SIZE="9" COLOR="#2E7D32">Crossed fingers presence = reject</FONT></TD></TR>
+            <TR><TD><FONT POINT-SIZE="9" COLOR="#444444">YOLOv8l on Metis NPU</FONT></TD></TR>
+            <TR><TD><FONT POINT-SIZE="9" COLOR="#444444">Correlation monitors book removal</FONT></TD></TR>
+            <TR><TD><FONT POINT-SIZE="8" COLOR="#1565C0">QR commands checked every ~1.5s</FONT></TD></TR>
         </TABLE>>,
         fillcolor="#E8F5E9", color="#2E7D32", fontcolor="#1B5E20"
     ];
 
     // Decision nodes
     book_detected [
-        label=<<B>Book detected?</B><BR/><FONT POINT-SIZE="8">3 consecutive frames</FONT>>,
+        label=<<B>Object detected?</B><BR/><FONT POINT-SIZE="8">correlation &lt; 0.975</FONT><BR/><FONT POINT-SIZE="8">15 consecutive frames</FONT>>,
         shape=diamond, fillcolor="#F5F5F5", color="#757575",
-        height=1.0, width=2.2
+        height=1.1, width=2.4
+    ];
+
+    person_check [
+        label=<<B>Person in area?</B><BR/><FONT POINT-SIZE="8">YOLO cls=0</FONT>>,
+        shape=diamond, fillcolor="#F5F5F5", color="#757575",
+        height=0.9, width=2.0
     ];
 
     display_result [
@@ -63,75 +81,62 @@ digraph ABCPipeline {
         shape=box
     ];
 
-    person_check [
-        label=<<B>Person detected?</B>>,
-        shape=diamond, fillcolor="#F5F5F5", color="#757575",
-        height=0.9, width=2.0
-    ];
-
-    gesture_check [
-        label=<<B>Crossed fingers &gt;4s?</B><BR/><FONT POINT-SIZE="8">80 frames (~4s)</FONT><BR/><FONT POINT-SIZE="7" COLOR="#2E7D32">person stays in loading area</FONT>>,
-        shape=diamond, fillcolor="#FCE4EC", color="#C62828",
-        height=1.1, width=2.4
-    ];
-
-    person_left [
-        label=<<B>Person left?</B><BR/><FONT POINT-SIZE="8">30 frames (~1.5s)</FONT>>,
+    removal_check [
+        label=<<B>Book removed?</B><BR/><FONT POINT-SIZE="8">correlation &gt; 0.985</FONT>>,
         shape=diamond, fillcolor="#F5F5F5", color="#757575",
         height=1.0, width=2.0
     ];
 
+    reject_check [
+        label=<<B>Person stays &gt;1.5s?</B><BR/><FONT POINT-SIZE="8">30 frames</FONT>>,
+        shape=diamond, fillcolor="#FCE4EC", color="#C62828",
+        height=1.0, width=2.2
+    ];
+
     // Result nodes
     accepted [
-        label=<<B>ACCEPTED</B>>,
+        label=<<B>ACCEPTED</B><BR/><FONT POINT-SIZE="9" COLOR="#2E7D32">Green V fullscreen</FONT>>,
         fillcolor="#C8E6C9", color="#2E7D32", fontcolor="#1B5E20",
-        shape=box, width=1.5
+        shape=box, width=1.8
     ];
 
     rejected [
-        label=<<B>REJECTED</B>>,
+        label=<<B>REJECTED</B><BR/><FONT POINT-SIZE="9" COLOR="#C62828">Red X fullscreen</FONT>>,
         fillcolor="#FFCDD2", color="#C62828", fontcolor="#B71C1C",
-        shape=box, width=1.5
+        shape=box, width=1.8
     ];
 
     // === EDGES ===
 
-    // Start -> Watching
-    start -> watching [label="  init pipeline"];
+    start -> splash [label="  init display"];
+    splash -> watching [label="  models loaded"];
 
     // Watching loop
     watching -> book_detected;
+    book_detected -> person_check [label="  yes  "];
     book_detected -> watching [label="  no  ", style=dashed, color="#999999"];
-    book_detected -> scanning [label="  yes — capture frame  "];
+
+    person_check -> watching [label="  yes\nPOSITIONING...  ", style=dashed, color="#999999"];
+    person_check -> scanning [label="  no — capture frame  "];
 
     // Scanning -> Display -> Waiting
     scanning -> display_result;
     display_result -> waiting;
 
     // Waiting logic
-    waiting -> person_check;
-
-    // Person detected -> gesture check
-    person_check -> gesture_check [label="  yes  "];
-    person_check -> person_left [label="  no (was seen)  "];
-
-    // Gesture outcomes
-    gesture_check -> rejected [label=<<FONT COLOR="#C62828">  yes (P×80)  </FONT>>,
-                               color="#C62828", penwidth=2.0];
-    gesture_check -> waiting [label="  no (?)\nkeep waiting  ", style=dashed, color="#999999"];
-
-    // Person left check
-    person_left -> accepted [label="  yes (*×30)  ", color="#2E7D32", penwidth=2.0];
-    person_left -> waiting [label="  not yet (.)\nkeep waiting  ", style=dashed, color="#999999"];
+    waiting -> removal_check;
+    removal_check -> accepted [label="  yes  ", color="#2E7D32", penwidth=2.0];
+    removal_check -> reject_check [label="  no, person seen  "];
+    reject_check -> rejected [label=<<FONT COLOR="#C62828">  yes  </FONT>>,
+                              color="#C62828", penwidth=2.0];
+    reject_check -> waiting [label="  not yet  ", style=dashed, color="#999999"];
 
     // Loop back
     accepted -> watching [label="  next book  ", color="#2E7D32", style=bold];
     rejected -> watching [label="  next book  ", color="#C62828", style=bold];
 
-    // ENTER -> quit
-    waiting -> stop [label="  ENTER pressed  ", style=dashed, color="#666666"];
-
-    // Ctrl+C
+    // Quit
+    waiting -> stop [label="  ENTER  ", style=dashed, color="#666666"];
     watching -> stop [label="  Ctrl+C  ", style=dashed, color="#999999"];
 
     // Rank hints

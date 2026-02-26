@@ -2,55 +2,61 @@
 
 ## State Machine
 
-The pipeline runs as a 3-state loop on the Orange Pi 5 Plus:
+The pipeline runs as a 3-state loop on the Orange Pi 5 Plus with fullscreen display (1024x600):
 
 ### 1. WATCHING
-- **Engine**: YOLOv8 on Metis NPU (~45 fps)
+- **Engine**: YOLOv8l on Metis NPU (~45 fps) + image correlation
 - **Goal**: Detect a book in the loading area
-- Filters YOLO detections to the loading area rectangle
-- Requires N consecutive frames with book detected (default: 3)
-- On detection: captures BGR frame from RTSP stream, transitions to SCANNING
+- **Book detection**: compares each frame against `empty_reference.jpg` via `cv2.matchTemplate` (correlation < 0.975 = object present)
+- **Person detection**: YOLOv8l cls=0 on Metis NPU (person in loading area = "POSITIONING...")
+- Requires N consecutive frames with object detected, no person (default: 15)
+- **QR commands**: checked every 30 frames (~1.5s) — DIAG ON/OFF, SHUTDOWN NOW, CALIBRATE
+- **Display**: live stream with loading area rectangle (green=empty, orange=object), correlation value
+- On detection: captures BGR frame, transitions to SCANNING
 
 ### 2. SCANNING
 - **Engine**: PaddleOCR v3 (CPU or Hybrid CPU+Metis)
 - **Goal**: Read text from the book cover, identify it in the database
 - Runs multi-pass OCR (2 standard + optional color filter passes)
+- **Display**: animated hourglass with progress %, phase text in green on dark background
+  - Phases: OCR Pass 1/N, ..., Spell check, Text analysis, Database search, Done
 - Queries SQLite database (55M books) for title/author match
-- Displays identification result, transitions to WAITING
+- **Display result**: centered book cover with Title/Author/Publisher overlay
+- Transitions to WAITING
 
 ### 3. WAITING
-- **Engine**: YOLOv8n-pose on Metis NPU (person detection in loading area)
+- **Engine**: YOLOv8 on Metis NPU (person/object detection)
 - **Goal**: Wait for user to take or reject the book
-- When feedback is disabled (`--no-feedback`), falls back to YOLOv8 detection model
-- Monitors the scene continuously:
+- With `--no-feedback`: uses correlation to detect book removal (no pose model needed)
+- With feedback: YOLOv8n-pose monitors for rejection gesture (person stays ~4s)
+- **QR commands**: checked every 30 frames
+- **Display**: result box with Title/Author/Publisher
 
-| Condition | Indicator | Frames needed | Result |
-|-----------|-----------|---------------|--------|
-| Crossed fingers shown ~4s (reject gesture) | `P` + countdown | 80 (~4s) | **REJECT** |
-| Person appeared then left (took book) | `*` | 30 (~1.5s) | **ACCEPT** |
-| No presence detected yet | `.` | - | Keep waiting |
-| ENTER pressed | - | immediate | **QUIT** |
+| Condition | Result | Visual feedback |
+|-----------|--------|----------------|
+| Book removed (correlation returns high) | **ACCEPT** | Green checkmark (V) fullscreen |
+| Person detected for ~1.5s then leaves | **ACCEPT** | Green checkmark (V) fullscreen |
+| Person stays in area ~4s (reject gesture) | **REJECT** | Red X fullscreen |
+| ENTER pressed | **QUIT** | - |
 
 After ACCEPT or REJECT, the pipeline loops back to WATCHING.
 
-## Reject/Accept Detection (Crossed Fingers Presence)
-Uses YOLOv8n-pose on Metis NPU for person/gesture detection:
-1. Person bounding box must overlap the loading area
-2. Crossed fingers shown for 80 consecutive frames (~4 seconds) → **REJECT**
-3. If the person leaves before 4s (took the book) → **ACCEPT**
+## QR Code Commands
+Active during WATCHING and WAITING states:
+- `DIAG ON` / `DIAG OFF` — toggle diagnostics overlay (bottom-left panel)
+- `SHUTDOWN NOW` — 5 second countdown, cancellable with `CANCEL` QR
+- `CALIBRATE` — re-run camera calibration (detect X markers, save new config)
 
-**Goal achieved**: the system correctly detects the reject gesture — showing two
-crossed index fingers is reliably detected as a discard signal. The approach uses
-person-level presence detection rather than individual keypoint tracking, which
-makes it robust regardless of the specific hand pose. From the overhead camera,
-individual keypoints (wrists, elbows) are too noisy (200-500px jumps between
-frames even with still hands), but person-level detection is very reliable
-(confidence 0.70-0.88). Any gesture that keeps the person in the loading area
-for ~4 seconds triggers the reject.
+## Startup Sequence
+1. Splash screen with logo (immediate, before heavy imports)
+2. Load Axelera SDK
+3. Clean up stale Metis processes
+4. Load OCR components (PaddleOCR models)
+5. Enter WATCHING state
 
 ## Hardware Usage by State
-| State | Metis NPU | CPU | Camera |
-|-------|-----------|-----|--------|
-| WATCHING | YOLOv8l (detection) | - | RTSP stream |
-| SCANNING | (hybrid mode) | PaddleOCR | Single frame |
-| WAITING | YOLOv8n-pose (keypoints) | - | RTSP stream |
+| State | Metis NPU | CPU | Display |
+|-------|-----------|-----|---------|
+| WATCHING | YOLOv8l (detection) | Correlation | Live stream + overlays |
+| SCANNING | (hybrid mode) | PaddleOCR | Hourglass + progress |
+| WAITING | YOLOv8l or pose | Correlation | Result box |
