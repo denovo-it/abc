@@ -549,8 +549,11 @@ def watch_for_book(rtsp_url, confidence_threshold=0.40, consecutive_needed=5,
                 cid = int(det.class_id)
                 score = float(det.score)
                 if cid == PERSON_CLASS_ID and score >= 0.30:
-                    has_person = True
-                    break
+                    box = (int(det.bbox.x1), int(det.bbox.y1),
+                           int(det.bbox.x2), int(det.bbox.y2))
+                    if _det_in_loading_area(box, loading_area):
+                        has_person = True
+                        break
 
             # -- QR code check (every 30 frames, ~1.5s) --
             if frame_count % 30 == 0:
@@ -1289,8 +1292,11 @@ def wait_for_removal(rtsp_url, confidence_threshold=0.40, feedback=True,
                 cid = int(det.class_id)
                 score = float(det.score)
                 if cid == PERSON_CLASS_ID and score >= 0.30:
-                    has_person = True
-                    break
+                    box = (int(det.bbox.x1), int(det.bbox.y1),
+                           int(det.bbox.x2), int(det.bbox.y2))
+                    if _det_in_loading_area(box, loading_area):
+                        has_person = True
+                        break
 
             # -- QR code check (every 30 frames) --
             if frame_count % 30 == 0:
