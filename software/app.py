@@ -106,25 +106,47 @@ def _check_qr_command(frame_bgr):
     return None
 
 
-def _handle_shutdown(rtsp_url_or_stream, get_frame_func):
-    """Run 5-second shutdown countdown. Returns True if shutdown proceeds."""
+def _handle_shutdown(rtsp_url, get_frame_func):
+    """Run 15-second shutdown countdown with live QR detection for CANCEL."""
     _diag_log("SHUTDOWN countdown started (15s)")
+
+    # Open a live camera feed to detect CANCEL QR during countdown
+    cap = None
+    if rtsp_url:
+        cap = cv2.VideoCapture(rtsp_url)
+        if not cap.isOpened():
+            cap = None
+
     deadline = time.time() + 15
     while time.time() < deadline:
         remaining = max(0, int(deadline - time.time()) + 1)
-        frame = get_frame_func()
+
+        # Try live frame first, fall back to static
+        frame = None
+        if cap is not None:
+            ret, frame = cap.read()
+            if not ret:
+                frame = None
+        if frame is None:
+            frame = get_frame_func()
+
         if frame is not None:
             vis = frame.copy()
             display.draw_shutdown_countdown(vis, remaining)
             if _diag_mode:
                 display.draw_diag_overlay(vis, list(_diag_lines))
             display.show(vis)
-            # Check for CANCEL QR
+            # Check for CANCEL QR on live frame
             cmd = _check_qr_command(frame)
             if cmd == 'CANCEL':
                 _diag_log("SHUTDOWN cancelled")
+                if cap is not None:
+                    cap.release()
                 return False
         time.sleep(0.1)
+
+    if cap is not None:
+        cap.release()
     _diag_log("SHUTDOWN executing")
     subprocess.run(['sudo', 'shutdown', '-h', 'now'], timeout=10)
     return True
@@ -599,7 +621,7 @@ def watch_for_book(rtsp_url, confidence_threshold=0.40, consecutive_needed=5,
                         _diag_mode = False
                     elif qr_cmd == 'SHUTDOWN NOW':
                         _last_frame = [frame_bgr]
-                        _handle_shutdown(None, lambda: _last_frame[0])
+                        _handle_shutdown(rtsp_url, lambda: _last_frame[0])
                     elif qr_cmd == 'CALIBRATE':
                         _handle_calibration()
                         # Restart WATCHING with new calibration
@@ -1350,7 +1372,7 @@ def wait_for_removal(rtsp_url, confidence_threshold=0.40, feedback=True,
                         _diag_mode = False
                     elif qr_cmd == 'SHUTDOWN NOW':
                         _last_frame = [frame_bgr]
-                        _handle_shutdown(None, lambda: _last_frame[0])
+                        _handle_shutdown(rtsp_url, lambda: _last_frame[0])
                     elif qr_cmd == 'CALIBRATE':
                         _handle_calibration()
 
