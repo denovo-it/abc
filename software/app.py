@@ -108,8 +108,8 @@ def _check_qr_command(frame_bgr):
 
 def _handle_shutdown(rtsp_url_or_stream, get_frame_func):
     """Run 5-second shutdown countdown. Returns True if shutdown proceeds."""
-    _diag_log("SHUTDOWN countdown started (5s)")
-    deadline = time.time() + 5
+    _diag_log("SHUTDOWN countdown started (15s)")
+    deadline = time.time() + 15
     while time.time() < deadline:
         remaining = max(0, int(deadline - time.time()) + 1)
         frame = get_frame_func()
