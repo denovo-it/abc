@@ -111,39 +111,45 @@ def _handle_shutdown(rtsp_url, get_frame_func):
     _diag_log("SHUTDOWN countdown started (15s)")
 
     # Open a live camera feed to detect CANCEL QR during countdown
+    # Use low-latency settings to avoid RTSP buffer lag
     cap = None
     if rtsp_url:
-        cap = cv2.VideoCapture(rtsp_url)
-        if not cap.isOpened():
+        cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+        if cap.isOpened():
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        else:
             cap = None
 
     deadline = time.time() + 15
+    last_qr_check = 0
+    static_frame = get_frame_func()
+
     while time.time() < deadline:
         remaining = max(0, int(deadline - time.time()) + 1)
 
-        # Try live frame first, fall back to static
-        frame = None
-        if cap is not None:
-            ret, frame = cap.read()
-            if not ret:
-                frame = None
-        if frame is None:
-            frame = get_frame_func()
+        # Display countdown (use static frame as base)
+        vis = static_frame.copy() if static_frame is not None else               np.zeros((display.SCREEN_H, display.SCREEN_W, 3), dtype=np.uint8)
+        display.draw_shutdown_countdown(vis, remaining)
+        if _diag_mode:
+            display.draw_diag_overlay(vis, list(_diag_lines))
+        display.show(vis)
 
-        if frame is not None:
-            vis = frame.copy()
-            display.draw_shutdown_countdown(vis, remaining)
-            if _diag_mode:
-                display.draw_diag_overlay(vis, list(_diag_lines))
-            display.show(vis)
-            # Check for CANCEL QR on live frame
-            cmd = _check_qr_command(frame)
-            if cmd == 'CANCEL':
-                _diag_log("SHUTDOWN cancelled")
-                if cap is not None:
+        # Check QR every ~0.5s on a fresh frame from camera
+        now = time.time()
+        if cap is not None and now - last_qr_check >= 0.5:
+            last_qr_check = now
+            # Flush RTSP buffer: grab several frames, decode only the last
+            for _ in range(5):
+                cap.grab()
+            ret, live_frame = cap.retrieve()
+            if ret and live_frame is not None:
+                cmd = _check_qr_command(live_frame)
+                if cmd == 'CANCEL':
+                    _diag_log("SHUTDOWN cancelled")
                     cap.release()
-                return False
-        time.sleep(0.1)
+                    return False
+
+        time.sleep(0.05)
 
     if cap is not None:
         cap.release()
