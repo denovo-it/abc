@@ -131,9 +131,11 @@ def _handle_shutdown(rtsp_url_or_stream, get_frame_func):
 
 
 def _handle_calibration():
-    """Run calibration from QR command. Returns True if successful."""
+    """Run calibration from QR command with visual preview. Returns True if successful."""
     global _loading_area, _empty_ref
     _diag_log("CALIBRATION started")
+
+    from calibrate import detect_x_markers, find_rectangle_from_markers, save_calibration
 
     # Show status on screen
     frame = np.zeros((display.SCREEN_H, display.SCREEN_W, 3), dtype=np.uint8)
@@ -144,23 +146,61 @@ def _handle_calibration():
     display.show(frame)
 
     try:
-        from calibrate import calibrate_camera, save_calibration
+        # Capture frame from camera
         rtsp_url = _rtsp_url()
-        result = calibrate_camera(rtsp_url, debug=False, show_gui=False)
-        if result is None:
-            _diag_log("CALIBRATION FAILED: no markers found")
-            # Show error for 3 seconds
-            frame = np.zeros((display.SCREEN_H, display.SCREEN_W, 3), dtype=np.uint8)
-            cv2.putText(frame, "CALIBRATION FAILED", (180, 280),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.3, (0, 0, 255), 3, cv2.LINE_AA)
-            cv2.putText(frame, "Could not detect 4 X markers", (180, 340),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 1, cv2.LINE_AA)
-            display.show(frame)
-            time.sleep(3)
+        cap = cv2.VideoCapture(rtsp_url)
+        if not cap.isOpened():
+            _diag_log("CALIBRATION FAILED: cannot connect to camera")
+            display.show_error("Calibration failed\nCannot connect to camera", duration=3)
             return False
 
-        rectangle, cal_frame = result
-        save_calibration(rectangle, cal_frame)
+        for _ in range(10):
+            ret, cam_frame = cap.read()
+        cap.release()
+
+        if not ret or cam_frame is None:
+            _diag_log("CALIBRATION FAILED: no frame")
+            display.show_error("Calibration failed\nNo frame from camera", duration=3)
+            return False
+
+        # Detect markers
+        markers = detect_x_markers(cam_frame, debug=False)
+
+        # Build preview: show camera frame with detected markers
+        preview = cam_frame.copy()
+        for mx, my in markers:
+            cv2.circle(preview, (mx, my), 12, (0, 0, 255), -1)
+            cv2.circle(preview, (mx, my), 20, (0, 0, 255), 2)
+
+        if len(markers) < 4:
+            # Show what was found (or not) on the camera frame
+            label = f"Found {len(markers)} markers (need 4)"
+            cv2.putText(preview, label, (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
+            display.show(display.frame_on_canvas(preview))
+            _diag_log(f"CALIBRATION FAILED: {len(markers)} markers")
+            time.sleep(5)
+            return False
+
+        # Find rectangle from markers
+        rectangle = find_rectangle_from_markers(markers, cam_frame.shape, debug=False)
+        if rectangle is None:
+            cv2.putText(preview, "Cannot determine area from markers", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2, cv2.LINE_AA)
+            display.show(display.frame_on_canvas(preview))
+            _diag_log("CALIBRATION FAILED: bad marker arrangement")
+            time.sleep(5)
+            return False
+
+        # Draw result on preview
+        x1, y1, x2, y2 = rectangle
+        cv2.rectangle(preview, (x1, y1), (x2, y2), (0, 255, 0), 3)
+        text = f"OK: ({x1},{y1})-({x2},{y2}) {x2-x1}x{y2-y1}px"
+        cv2.putText(preview, text, (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
+
+        # Save calibration
+        save_calibration(rectangle, cam_frame)
 
         # Reset cached calibration data so it reloads
         _loading_area = None
@@ -168,16 +208,10 @@ def _handle_calibration():
         _load_loading_area()
         _load_empty_reference()
 
-        x1, y1, x2, y2 = rectangle
         _diag_log(f"CALIBRATION OK: ({x1},{y1})-({x2},{y2})")
 
-        # Show success for 3 seconds
-        frame = np.zeros((display.SCREEN_H, display.SCREEN_W, 3), dtype=np.uint8)
-        cv2.putText(frame, "CALIBRATION OK", (210, 260),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.3, (0, 200, 0), 3, cv2.LINE_AA)
-        cv2.putText(frame, f"Area: {x2-x1}x{y2-y1}px", (300, 320),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 1, cv2.LINE_AA)
-        display.show(frame)
+        # Show preview with result for 5 seconds
+        display.show(display.frame_on_canvas(preview))
         time.sleep(3)
         return True
 
