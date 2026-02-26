@@ -48,7 +48,7 @@ Only one model uses the Metis NPU at a time. Each state releases the device befo
 
 ### Python (venv)
 
-Key packages (full list in `pipeline-requirements.txt`):
+Key packages (full list in `tools/requirements.txt`):
 
 - **paddleocr 2.10.0** + **paddlepaddle 3.2.2** - OCR engine
 - **opencv-python 4.11.0** - Image processing

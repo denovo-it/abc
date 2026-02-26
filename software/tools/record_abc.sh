@@ -8,7 +8,7 @@
 
 set -e
 
-RECORDINGS_DIR="/home/orangepi/abc/software/recordings"
+RECORDINGS_DIR="/home/orangepi/recordings"
 mkdir -p "$RECORDINGS_DIR"
 OUTPUT="${1:-$RECORDINGS_DIR/recording_$(date +%Y%m%d_%H%M%S).mp4}"
 DISPLAY_TARGET=":0"
@@ -65,4 +65,4 @@ trap cleanup EXIT
 echo "  Launching A.B.C...."
 echo ""
 cd /home/orangepi/abc/software
-/home/orangepi/abc/software/venv/bin/python app.py --ocr-model hybrid --no-feedback
+/home/orangepi/abc/software/venv/bin/python app.py --ocr-model hybrid --no-feedback --debug

@@ -21,8 +21,5 @@ Thumbs.db
 *.swp
 
 
-# Test images
-test_images/
 config/
 results.csv
-recordings/

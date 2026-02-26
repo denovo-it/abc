@@ -906,7 +906,7 @@ def scan_book(frame, ocr_model='cpu', color_filters=False, lang=None,
     )
 
     # Fuzzy DB correction
-    _progress(total_passes, f"Correzione ({len(text_boxes)} blocchi)")
+    _progress(total_passes, f"Spell check ({len(text_boxes)} blocks)")
     print(f"   Fuzzy DB correction ({len(text_boxes)} blocks)...",
           end='', flush=True)
     from scan_books import TextBox
@@ -921,7 +921,7 @@ def scan_book(frame, ocr_model='cpu', color_filters=False, lang=None,
     print(" done")
 
     # Parse
-    _progress(total_passes + 1, "Analisi testo")
+    _progress(total_passes + 1, "Text analysis")
     print(f"   Parsing book information...", end='', flush=True)
     img_h, img_w = frame.shape[:2]
     book_info_obj = parser.parse(corrected_text_boxes, img_h, img_w, image=frame)
@@ -939,7 +939,7 @@ def scan_book(frame, ocr_model='cpu', color_filters=False, lang=None,
     improved = postprocessor.improve_result(book_dict)
 
     # Database identification
-    _progress(total_passes + 2, "Searching database")
+    _progress(total_passes + 2, "Database search")
     print(f"   Searching database...", end='', flush=True)
     db_result = _identify_book(improved, parser, lang=lang)
     if db_result['matched']:
@@ -947,7 +947,7 @@ def scan_book(frame, ocr_model='cpu', color_filters=False, lang=None,
     else:
         print(" not found")
 
-    _progress(total_steps, "Completato!")
+    _progress(total_steps, "Done")
     return improved, db_result
 
 

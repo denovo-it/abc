@@ -409,8 +409,12 @@ def draw_splash(status_text, steps=None):
                         FONT, 0.55, color, 1, AA)
 
     # Current status at bottom (with animated dots)
-    n_dots = int(time.time() * 2) % 4
-    display_text = status_text.rstrip('.') + '.' * max(1, n_dots)
+    # Animated dots only for loading messages (not for final status like 'Ready!')
+    if status_text.endswith('..') or status_text.endswith('...'):
+        n_dots = int(time.time() * 2) % 4
+        display_text = status_text.rstrip('.') + '.' * max(1, n_dots)
+    else:
+        display_text = status_text
     (tw2, th2), _ = cv2.getTextSize(display_text, FONT, 0.7, 2)
     cv2.putText(frame, display_text, ((w - tw2) // 2, h - 60),
                 FONT, 0.7, (0, 165, 255), 2, AA)

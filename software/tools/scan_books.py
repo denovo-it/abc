@@ -1865,7 +1865,7 @@ class ContinuousScanner:
         """Remove temporary files"""
         temp_files = [
             'temp_ocr_input.jpg',
-            'test_images/debug_preprocessed_last.jpg',
+            '/tmp/abc_test_images/debug_preprocessed_last.jpg',
             '/tmp/scan_preview_temp.jpg',
             '/tmp/metis_crop_temp.jpg',
             '/tmp/ocr_pass_upscale.jpg',
@@ -1907,7 +1907,7 @@ class ContinuousScanner:
                     pass
 
         # 2. Clean old book images (keep last 10)
-        book_images = sorted(glob.glob('test_images/book_*.jpg'))
+        book_images = sorted(glob.glob('/tmp/abc_test_images/book_*.jpg'))
         keep_last = 10
         if len(book_images) > keep_last:
             for f in book_images[:-keep_last]:
@@ -1918,7 +1918,7 @@ class ContinuousScanner:
                     pass
 
         # 3. Clean debug images in test_images
-        for f in glob.glob('test_images/debug_*.jpg'):
+        for f in glob.glob('/tmp/abc_test_images/debug_*.jpg'):
             try:
                 os.remove(f)
                 cleaned += 1
@@ -2059,7 +2059,7 @@ class ContinuousScanner:
 
     def _load_loading_area(self):
         """Load loading area coordinates"""
-        config_file = 'test_images/loading_area.txt'
+        config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'config', 'loading_area.txt')
         if not os.path.exists(config_file):
             return None
 
@@ -2135,7 +2135,7 @@ class ContinuousScanner:
         cv2.imwrite(temp_up, upscaled)
         temp_files.append(temp_up)
         if self.debug:
-            cv2.imwrite('test_images/debug_upscaled_last.jpg', upscaled)
+            cv2.imwrite('/tmp/abc_test_images/debug_upscaled_last.jpg', upscaled)
         boxes_upscale = ocr_func(temp_up)
         boxes_upscale = [
             TextBox(b.text,
@@ -2164,7 +2164,7 @@ class ContinuousScanner:
                 cv2.imwrite(temp_f, filtered)
                 temp_files.append(temp_f)
                 if self.debug:
-                    cv2.imwrite(f'test_images/debug_filter_{label}.jpg', filtered)
+                    cv2.imwrite(f'/tmp/abc_test_images/debug_filter_{label}.jpg', filtered)
                 boxes_f = ocr_func(temp_f)
                 all_pass_boxes.append(boxes_f)
                 print(f" done ({len(boxes_f)} blocks)")
@@ -2387,7 +2387,7 @@ class ContinuousScanner:
                 # Save capture
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 os.makedirs('test_images', exist_ok=True)
-                capture_path = f"test_images/book_{timestamp}.jpg"
+                capture_path = f"/tmp/abc_test_images/book_{timestamp}.jpg"
                 cv2.imwrite(capture_path, cropped)
                 # Note: image will be deleted after OCR processing to save space
                 print(" ✅")

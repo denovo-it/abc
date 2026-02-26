@@ -17,9 +17,6 @@ download.log
 # Backup directories
 backup_*/
 
-# Test images (keep structure, ignore content)
-test_images/*.jpg
-!test_images/.gitkeep
 
 # Python cache
 __pycache__/
@@ -39,5 +36,3 @@ venv/
 .DS_Store
 Thumbs.db
 
-# CSV results (user data)
-ocr_results.csv
