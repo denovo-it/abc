@@ -2437,7 +2437,7 @@ class ContinuousScanner:
 
     def _log_result(self, timestamp, book_info, db_result=None):
         """Log result to CSV file"""
-        log_file = 'ocr_results.csv'
+        log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'results.csv')
 
         # Create header if needed
         if not os.path.exists(log_file):

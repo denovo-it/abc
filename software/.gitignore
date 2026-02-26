@@ -26,3 +26,4 @@ diagnostics/
 # Test images
 test_images/
 config/books.db
+results.csv
