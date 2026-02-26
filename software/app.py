@@ -939,7 +939,7 @@ def scan_book(frame, ocr_model='cpu', color_filters=False, lang=None,
     improved = postprocessor.improve_result(book_dict)
 
     # Database identification
-    _progress(total_passes + 2, "Ricerca nel database")
+    _progress(total_passes + 2, "Searching database")
     print(f"   Searching database...", end='', flush=True)
     db_result = _identify_book(improved, parser, lang=lang)
     if db_result['matched']:

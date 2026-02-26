@@ -234,12 +234,23 @@ def draw_hourglass(frame, tick=0, progress=None, phase_text=None):
         cv2.putText(frame, pct_text, (cx - pw // 2, cy + ph // 2),
                     FONT, 0.9, (255, 255, 255), 2, AA)
 
-    # Phase text below hourglass
+    # Phase text below hourglass (green on dark background)
     if phase_text:
         y_label = cy + size + 50
-        (ptw, pth), _ = cv2.getTextSize(phase_text, FONT, 0.6, 1)
-        cv2.putText(frame, phase_text, (cx - ptw // 2, y_label),
-                    FONT, 0.6, (180, 180, 180), 1, AA)
+        font_scale = 0.7
+        thickness = 2
+        (ptw, pth), baseline = cv2.getTextSize(phase_text, FONT, font_scale, thickness)
+        pad = 10
+        tx = cx - ptw // 2
+        # Dark background rectangle
+        overlay = frame.copy()
+        cv2.rectangle(overlay,
+                      (tx - pad, y_label - pth - pad),
+                      (tx + ptw + pad, y_label + baseline + pad),
+                      (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+        cv2.putText(frame, phase_text, (tx, y_label),
+                    FONT, font_scale, (0, 220, 0), thickness, AA)
 
 
 # ---------------------------------------------------------------------------
