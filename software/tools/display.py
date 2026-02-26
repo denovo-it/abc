@@ -534,7 +534,7 @@ def draw_shutdown_countdown(frame, remaining_secs):
 # Accept / Reject fullscreen feedback
 # ---------------------------------------------------------------------------
 
-def show_accepted(duration=1.5):
+def show_accepted(duration=0.8):
     """Show a large green checkmark fullscreen."""
     frame = np.zeros((SCREEN_H, SCREEN_W, 3), dtype=np.uint8)
     cx, cy = SCREEN_W // 2, SCREEN_H // 2
@@ -550,7 +550,7 @@ def show_accepted(duration=1.5):
     time.sleep(duration)
 
 
-def show_rejected(duration=1.5):
+def show_rejected(duration=0.8):
     """Show a large red X fullscreen."""
     frame = np.zeros((SCREEN_H, SCREEN_W, 3), dtype=np.uint8)
     cx, cy = SCREEN_W // 2, SCREEN_H // 2
