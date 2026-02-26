@@ -397,6 +397,13 @@ def draw_splash(status_text, steps=None):
     # Step checklist
     if steps:
         y_start = url_y + 45
+        # Calculate max width to center the block
+        texts = []
+        for label, done in steps:
+            mark = "[OK]" if done else "[..]"
+            texts.append(f"  {mark} {label}")
+        max_tw = max(cv2.getTextSize(t, FONT, 0.55, 1)[0][0] for t in texts)
+        x_start = (w - max_tw) // 2 - 10
         for i, (label, done) in enumerate(steps):
             y = y_start + i * 28
             if done:
@@ -405,7 +412,7 @@ def draw_splash(status_text, steps=None):
             else:
                 mark = "[..]"
                 color = (100, 100, 100)
-            cv2.putText(frame, f"  {mark} {label}", (w // 2 - 140, y),
+            cv2.putText(frame, f"  {mark} {label}", (x_start, y),
                         FONT, 0.55, color, 1, AA)
 
     # Current status at bottom (with animated dots)
@@ -557,5 +564,39 @@ def show_rejected(duration=0.8):
     s = 120  # half-size
     cv2.line(frame, (cx - s, cy - s), (cx + s, cy + s), (0, 0, 220), 28, AA)
     cv2.line(frame, (cx + s, cy - s), (cx - s, cy + s), (0, 0, 220), 28, AA)
+    show(frame)
+    time.sleep(duration)
+
+
+def show_error(message, duration=15):
+    """Show fatal error message on screen and wait before exiting.
+
+    message: error text (supports \\n for multiple lines).
+    duration: seconds to display before returning.
+    """
+    frame = np.zeros((SCREEN_H, SCREEN_W, 3), dtype=np.uint8)
+    w, h = SCREEN_W, SCREEN_H
+
+    # Red header
+    header = "ERROR"
+    (hw, hh), _ = cv2.getTextSize(header, FONT, 2.0, 4)
+    cv2.putText(frame, header, ((w - hw) // 2, 100),
+                FONT, 2.0, (0, 0, 255), 4, AA)
+
+    # Error message lines
+    lines = message.split('\n')
+    y = 200
+    for line in lines:
+        (lw, lh), _ = cv2.getTextSize(line, FONT, 0.8, 2)
+        cv2.putText(frame, line, ((w - lw) // 2, y),
+                    FONT, 0.8, (255, 255, 255), 2, AA)
+        y += 45
+
+    # Hint at bottom
+    hint = f"Shutting down in {duration}s..."
+    (tw, th), _ = cv2.getTextSize(hint, FONT, 0.6, 1)
+    cv2.putText(frame, hint, ((w - tw) // 2, h - 40),
+                FONT, 0.6, (120, 120, 120), 1, AA)
+
     show(frame)
     time.sleep(duration)

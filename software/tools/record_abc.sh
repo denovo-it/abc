@@ -65,4 +65,4 @@ trap cleanup EXIT
 echo "  Launching A.B.C...."
 echo ""
 cd /home/orangepi/abc/software
-/home/orangepi/abc/software/venv/bin/python app.py --ocr-model hybrid --no-feedback --debug
+/home/orangepi/abc/software/venv/bin/python app.py --ocr-model hybrid --debug

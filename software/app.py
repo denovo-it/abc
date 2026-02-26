@@ -409,6 +409,47 @@ def _kill_stale_metis():
         pass
 
 
+def _check_metis():
+    """Check if Metis NPU device is available and usable."""
+    import subprocess
+    dev = '/dev/metis-0:1:0'
+    if not os.path.exists(dev):
+        return False, "Metis NPU device not found.\nCheck hardware connection and driver."
+    # Check if kernel thread is stuck in D state
+    try:
+        result = subprocess.run(
+            ['fuser', dev], capture_output=True, text=True, timeout=5
+        )
+        pids = result.stdout.strip().split()
+        for pid in [p.strip() for p in pids if p.strip()]:
+            try:
+                with open(f'/proc/{pid}/status') as f:
+                    for line in f:
+                        if line.startswith('State:') and 'D' in line.split()[1]:
+                            return False, "Metis NPU is locked by a stuck process.\nReboot the device to recover."
+            except (OSError, IndexError):
+                pass
+    except Exception:
+        pass
+    return True, ""
+
+
+def _check_camera(rtsp_url):
+    """Check if RTSP camera is reachable and credentials are valid."""
+    try:
+        cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000)
+        if not cap.isOpened():
+            return False, "Cannot connect to camera.\nCheck network and RTSP URL in .env"
+        ret, frame = cap.read()
+        cap.release()
+        if not ret or frame is None:
+            return False, "Camera connected but no frames received.\nCheck RTSP credentials in .env"
+        return True, ""
+    except Exception as e:
+        return False, f"Camera error: {e}\nCheck .env configuration"
+
+
 # ---------------------------------------------------------------------------
 # Display helpers
 # ---------------------------------------------------------------------------
@@ -1418,6 +1459,8 @@ def run_pipeline(args):
 
     use_feedback = not args.no_feedback
     loading_steps = [
+        ("Metis NPU check", False),
+        ("Camera check", False),
         ("Metis NPU cleanup", False),
         ("OCR components", False),
         ("PP-OCR models", False),
@@ -1432,9 +1475,26 @@ def run_pipeline(args):
 
     _splash("Starting up...")
 
+    # Pre-flight checks
+    _splash("Checking Metis NPU...")
+    metis_ok, metis_err = _check_metis()
+    if not metis_ok:
+        print(f"  FATAL: {metis_err}")
+        display.show_error(metis_err)
+        return
+    _splash("Metis NPU OK", step_idx=0)
+
+    _splash("Checking camera...")
+    cam_ok, cam_err = _check_camera(rtsp_url)
+    if not cam_ok:
+        print(f"  FATAL: {cam_err}")
+        display.show_error(cam_err)
+        return
+    _splash("Camera OK", step_idx=1)
+
     _splash("Cleaning up Metis...")
     _kill_stale_metis()
-    _splash("Metis cleanup done", step_idx=0)
+    _splash("Metis cleanup done", step_idx=2)
 
     # Pre-initialize OCR components
     _splash("Loading OCR components...")
@@ -1442,7 +1502,7 @@ def run_pipeline(args):
     _init_ocr_components(args.ocr_model, debug=args.debug)
     print("  OCR ready.\n")
     # Mark remaining OCR steps as done
-    for i in range(1, len(loading_steps)):
+    for i in range(3, len(loading_steps)):
         loading_steps[i] = (loading_steps[i][0], True)
     _splash("Ready!")
 
@@ -1597,8 +1657,8 @@ def main():
         '--consecutive', type=int, default=15,
         help='Consecutive frames to confirm book detection (default: 5)')
     parser.add_argument(
-        '--color-filters', action='store_true',
-        help='Enable extra OCR passes with color filters (slower)')
+        '--no-color-filters', dest='color_filters', action='store_false', default=True,
+        help='Disable color filter OCR passes (faster, less accurate on artistic covers)')
     parser.add_argument(
         '--no-feedback', action='store_true',
         help='Skip gesture feedback phase (auto-accept)')

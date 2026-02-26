@@ -20,4 +20,4 @@ unclutter -idle 0 -root &
 
 # Launch A.B.C.
 cd /home/orangepi/abc/software
-exec /home/orangepi/abc/software/venv/bin/python app.py --ocr-model hybrid --no-feedback
+exec /home/orangepi/abc/software/venv/bin/python -u app.py --ocr-model hybrid
