@@ -25,10 +25,12 @@ import gc
 import os
 import re
 import select
+import subprocess
 import sys
 import threading
 import time
 import warnings
+from collections import deque
 
 # Ensure X11 display is available (needed when launching via SSH)
 if not os.environ.get('DISPLAY'):
@@ -63,6 +65,121 @@ del _stderr_backup, _io
 import numpy as np
 import display
 
+# Show splash screen immediately (before heavy imports)
+display.init_window()
+display.draw_splash("Starting up...")
+
+# ---------------------------------------------------------------------------
+# QR code detection & diagnostics
+# ---------------------------------------------------------------------------
+
+_qr_detector = cv2.QRCodeDetector()
+_diag_mode = False
+_diag_lines = deque(maxlen=25)
+
+
+def _diag_log(msg):
+    """Log a diagnostic message (print + store for overlay)."""
+    ts = time.strftime('%H:%M:%S')
+    line = f"{ts} {msg}"
+    print(f"  [DIAG] {line}")
+    _diag_lines.append(line)
+
+
+def _check_qr_command(frame_bgr):
+    """Check for QR code in frame, return recognized command or None."""
+    try:
+        data, _, _ = _qr_detector.detectAndDecode(frame_bgr)
+        if data:
+            cmd = data.strip().upper()
+            if cmd in ('DIAG ON', 'DIAG OFF', 'SHUTDOWN NOW', 'CANCEL',
+                       'CALIBRATE'):
+                return cmd
+    except Exception:
+        pass
+    return None
+
+
+def _handle_shutdown(rtsp_url_or_stream, get_frame_func):
+    """Run 5-second shutdown countdown. Returns True if shutdown proceeds."""
+    _diag_log("SHUTDOWN countdown started (5s)")
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        remaining = max(0, int(deadline - time.time()) + 1)
+        frame = get_frame_func()
+        if frame is not None:
+            vis = frame.copy()
+            display.draw_shutdown_countdown(vis, remaining)
+            if _diag_mode:
+                display.draw_diag_overlay(vis, list(_diag_lines))
+            display.show(vis)
+            # Check for CANCEL QR
+            cmd = _check_qr_command(frame)
+            if cmd == 'CANCEL':
+                _diag_log("SHUTDOWN cancelled")
+                return False
+        time.sleep(0.1)
+    _diag_log("SHUTDOWN executing")
+    subprocess.run(['sudo', 'shutdown', '-h', 'now'], timeout=10)
+    return True
+
+
+def _handle_calibration():
+    """Run calibration from QR command. Returns True if successful."""
+    global _loading_area, _empty_ref
+    _diag_log("CALIBRATION started")
+
+    # Show status on screen
+    frame = np.zeros((display.SCREEN_H, display.SCREEN_W, 3), dtype=np.uint8)
+    cv2.putText(frame, "CALIBRATING...", (200, 280),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 165, 255), 3, cv2.LINE_AA)
+    cv2.putText(frame, "Keep X markers visible", (220, 340),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 1, cv2.LINE_AA)
+    display.show(frame)
+
+    try:
+        from calibrate import calibrate_camera, save_calibration
+        rtsp_url = _rtsp_url()
+        result = calibrate_camera(rtsp_url, debug=False, show_gui=False)
+        if result is None:
+            _diag_log("CALIBRATION FAILED: no markers found")
+            # Show error for 3 seconds
+            frame = np.zeros((display.SCREEN_H, display.SCREEN_W, 3), dtype=np.uint8)
+            cv2.putText(frame, "CALIBRATION FAILED", (180, 280),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.3, (0, 0, 255), 3, cv2.LINE_AA)
+            cv2.putText(frame, "Could not detect 4 X markers", (180, 340),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 1, cv2.LINE_AA)
+            display.show(frame)
+            time.sleep(3)
+            return False
+
+        rectangle, cal_frame = result
+        save_calibration(rectangle, cal_frame)
+
+        # Reset cached calibration data so it reloads
+        _loading_area = None
+        _empty_ref = None
+        _load_loading_area()
+        _load_empty_reference()
+
+        x1, y1, x2, y2 = rectangle
+        _diag_log(f"CALIBRATION OK: ({x1},{y1})-({x2},{y2})")
+
+        # Show success for 3 seconds
+        frame = np.zeros((display.SCREEN_H, display.SCREEN_W, 3), dtype=np.uint8)
+        cv2.putText(frame, "CALIBRATION OK", (210, 260),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.3, (0, 200, 0), 3, cv2.LINE_AA)
+        cv2.putText(frame, f"Area: {x2-x1}x{y2-y1}px", (300, 320),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (200, 200, 200), 1, cv2.LINE_AA)
+        display.show(frame)
+        time.sleep(3)
+        return True
+
+    except Exception as e:
+        _diag_log(f"CALIBRATION error: {e}")
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -71,6 +188,7 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = _SCRIPT_DIR  # pipeline.py lives at software/ level
 _OCR_DIR = os.path.join(_PROJECT_ROOT, 'ocr-module')
 _SDK_DIR = os.path.join(_PROJECT_ROOT, 'voyager-sdk')
+_CONFIG_DIR = os.path.join(_PROJECT_ROOT, 'config')
 
 # ---------------------------------------------------------------------------
 # Environment bootstrap
@@ -138,6 +256,7 @@ _load_env(os.path.join(_SCRIPT_DIR, '.env'))
 _bootstrap_axelera_env()
 
 # Now safe to import axelera and OCR modules
+display.draw_splash("Loading Axelera SDK...")
 from axelera.app import config as ax_config  # noqa: E402
 from axelera.app import create_inference_stream  # noqa: E402
 
@@ -163,7 +282,7 @@ def _load_loading_area():
     if _loading_area is not None:
         return _loading_area
 
-    config_file = os.path.join(_OCR_DIR, 'test_images', 'loading_area.txt')
+    config_file = os.path.join(_CONFIG_DIR, 'loading_area.txt')
     if not os.path.exists(config_file):
         print("  WARNING: No loading_area.txt found, detection uses full frame")
         _loading_area = ()  # empty tuple = disabled
@@ -197,7 +316,7 @@ def _load_empty_reference():
     if _empty_ref is not None:
         return _empty_ref
 
-    ref_path = os.path.join(_OCR_DIR, 'test_images', 'empty_reference.jpg')
+    ref_path = os.path.join(_CONFIG_DIR, 'empty_reference.jpg')
     if not os.path.exists(ref_path):
         _empty_ref = ()  # empty tuple = not available
         return _empty_ref
@@ -321,6 +440,7 @@ def watch_for_book(rtsp_url, confidence_threshold=0.40, consecutive_needed=5,
     (positioning vs ready).  Returns captured BGR frame (cropped to loading
     area) when triggered.
     """
+    global _diag_mode
     print("\n" + "=" * 60)
     print("  WATCHING for book... (press ENTER to quit)")
     print("=" * 60)
@@ -356,7 +476,7 @@ def watch_for_book(rtsp_url, confidence_threshold=0.40, consecutive_needed=5,
     try:
         for frame_result in stream:
             # Check if user pressed ENTER (non-blocking stdin poll)
-            if select.select([sys.stdin], [], [], 0)[0]:
+            if sys.stdin.isatty() and select.select([sys.stdin], [], [], 0)[0]:
                 sys.stdin.readline()
                 if not debug and dot_count > 0:
                     print()
@@ -387,6 +507,24 @@ def watch_for_book(rtsp_url, confidence_threshold=0.40, consecutive_needed=5,
                     has_person = True
                     break
 
+            # -- QR code check (every 30 frames, ~1.5s) --
+            if frame_count % 30 == 0:
+                qr_cmd = _check_qr_command(frame_bgr)
+                if qr_cmd:
+                    _diag_log(f"QR: {qr_cmd}")
+                    if qr_cmd == 'DIAG ON':
+                        _diag_mode = True
+                    elif qr_cmd == 'DIAG OFF':
+                        _diag_mode = False
+                    elif qr_cmd == 'SHUTDOWN NOW':
+                        _last_frame = [frame_bgr]
+                        _handle_shutdown(None, lambda: _last_frame[0])
+                    elif qr_cmd == 'CALIBRATE':
+                        _handle_calibration()
+                        # Restart WATCHING with new calibration
+                        captured_frame = None
+                        break
+
             # -- Display overlay (throttled: every 5th frame) --
             if frame_count % 5 == 0:
                 try:
@@ -409,6 +547,8 @@ def watch_for_book(rtsp_url, confidence_threshold=0.40, consecutive_needed=5,
                         status = "WATCHING — area empty (press ENTER to quit)"
                     display.draw_status(vis, status,
                                         display.COLORS['status_watching'])
+                    if _diag_mode:
+                        display.draw_diag_overlay(vis, list(_diag_lines))
                     display.show(vis)
                 except Exception:
                     pass
@@ -437,6 +577,7 @@ def watch_for_book(rtsp_url, confidence_threshold=0.40, consecutive_needed=5,
                     print(f"  Object detected in loading area!"
                           f" (corr={corr:.3f},"
                           f" {consecutive_needed} consecutive frames)")
+                    _diag_log(f"WATCHING->SCANNING corr={corr:.3f}")
                     break
 
             elif has_object and has_person:
@@ -1035,6 +1176,7 @@ def wait_for_removal(rtsp_url, confidence_threshold=0.40, feedback=True,
 
     Returns 'continue', 'reject', or 'quit'.
     """
+    global _diag_mode
     print("\n" + "=" * 60)
     if feedback:
         print("  WAITING - Person presence to REJECT, remove book to ACCEPT (press ENTER to quit)")
@@ -1073,7 +1215,7 @@ def wait_for_removal(rtsp_url, confidence_threshold=0.40, feedback=True,
     try:
         for frame_result in stream:
             # Check if user pressed ENTER (non-blocking stdin poll)
-            if select.select([sys.stdin], [], [], 0)[0]:
+            if sys.stdin.isatty() and select.select([sys.stdin], [], [], 0)[0]:
                 sys.stdin.readline()
                 if not debug and dot_count > 0:
                     print()
@@ -1105,6 +1247,21 @@ def wait_for_removal(rtsp_url, confidence_threshold=0.40, feedback=True,
                     has_person = True
                     break
 
+            # -- QR code check (every 30 frames) --
+            if frame_count % 30 == 0:
+                qr_cmd = _check_qr_command(frame_bgr)
+                if qr_cmd:
+                    _diag_log(f"QR: {qr_cmd}")
+                    if qr_cmd == 'DIAG ON':
+                        _diag_mode = True
+                    elif qr_cmd == 'DIAG OFF':
+                        _diag_mode = False
+                    elif qr_cmd == 'SHUTDOWN NOW':
+                        _last_frame = [frame_bgr]
+                        _handle_shutdown(None, lambda: _last_frame[0])
+                    elif qr_cmd == 'CALIBRATE':
+                        _handle_calibration()
+
             # -- Display overlay --
             try:
                 if frame_count % 5 == 0:
@@ -1129,6 +1286,8 @@ def wait_for_removal(rtsp_url, confidence_threshold=0.40, feedback=True,
                 elif is_empty and consecutive_gone > 0:
                     ratio = 1.0 - consecutive_gone / GONE_FRAMES_NEEDED
                     display.draw_countdown_bar(vis_frame, ratio, mode='accept')
+                if _diag_mode:
+                    display.draw_diag_overlay(vis_frame, list(_diag_lines))
                 display.show(vis_frame)
             except Exception:
                 pass
@@ -1163,6 +1322,7 @@ def wait_for_removal(rtsp_url, confidence_threshold=0.40, feedback=True,
                     if not debug and dot_count > 0:
                         print()
                     print("  Person detected — REJECTED")
+                    _diag_log("WAITING: REJECTED (person)")
                     result = 'reject'
                     break
             else:
@@ -1184,6 +1344,7 @@ def wait_for_removal(rtsp_url, confidence_threshold=0.40, feedback=True,
                     if not debug and dot_count > 0:
                         print()
                     print("  Book removed, accepting...")
+                    _diag_log("WAITING->WATCHING (accepted)")
                     break
             else:
                 consecutive_gone = 0
@@ -1219,6 +1380,13 @@ def wait_for_removal(rtsp_url, confidence_threshold=0.40, feedback=True,
 
 def run_pipeline(args):
     """Main pipeline state machine loop."""
+    global _diag_mode
+
+    # Activate diagnostics overlay if --debug
+    if args.debug:
+        _diag_mode = True
+        _diag_log("Diagnostics mode ON (--debug)")
+
     rtsp_url = _rtsp_url()
 
     print("=" * 60)
@@ -1243,9 +1411,6 @@ def run_pipeline(args):
     else:
         print(f"  Loading area:  FULL FRAME (no calibration)")
     print("=" * 60)
-
-    # Initialize display window early so splash is visible during loading
-    display.init_window()
 
     use_feedback = not args.no_feedback
     loading_steps = [
@@ -1328,7 +1493,7 @@ def run_pipeline(args):
             scan_thread.start()
 
             # Animate hourglass while OCR runs
-            scan_frame_base = frame.copy()
+            scan_frame_base = display.frame_on_canvas(frame)
             tick = 0
             while not scan_state['done']:
                 tick += 1
@@ -1338,6 +1503,8 @@ def run_pipeline(args):
                                        phase_text=scan_state['phase'])
                 display.draw_status(vis, "SCANNING",
                                     display.COLORS['status_scanning'])
+                if _diag_mode:
+                    display.draw_diag_overlay(vis, list(_diag_lines))
                 display.show(vis)
                 time.sleep(0.05)  # ~20fps animation
 
@@ -1362,11 +1529,15 @@ def run_pipeline(args):
                        'author': book_info['author'],
                        'publisher': book_info['publisher']}
 
-            result_display = frame.copy()
+            _diag_log(f"OCR: {bdi['title'][:30]} / {bdi['author'][:20]}")
+
+            result_display = display.frame_on_canvas(frame)
             display.draw_result_box(result_display, bdi['title'],
                                     bdi['author'], bdi['publisher'])
             display.draw_status(result_display, "RESULT",
                                 display.COLORS['status_scanning'])
+            if _diag_mode:
+                display.draw_diag_overlay(result_display, list(_diag_lines))
             display.show(result_display)
 
             # --- WAITING (with integrated gesture detection) ---
@@ -1386,8 +1557,10 @@ def run_pipeline(args):
                 return
             elif wait_result == 'reject':
                 print("  >> REJECTED by user gesture")
+                display.show_rejected()
             else:
                 print("  >> ACCEPTED")
+                display.show_accepted()
 
             print()
 

@@ -26,6 +26,7 @@ import numpy as np
 # Resolve paths relative to this script's directory
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _OCR_DIR = os.path.join(_SCRIPT_DIR, 'ocr-module')
+_CONFIG_DIR = os.path.join(_SCRIPT_DIR, 'config')
 
 # Add ocr-module to path for config import
 sys.path.insert(0, _OCR_DIR)
@@ -375,10 +376,9 @@ def calibrate_camera(rtsp_url, debug=False, show_gui=False):
     cv2.putText(preview, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
                 0.7, (0, 255, 0), 2)
 
-    # Save preview — in ocr-module/test_images/ (where app.py reads from)
-    preview_dir = os.path.join(_OCR_DIR, 'test_images')
-    os.makedirs(preview_dir, exist_ok=True)
-    preview_path = os.path.join(preview_dir, 'calibration_preview.jpg')
+    # Save preview in config/ directory
+    os.makedirs(_CONFIG_DIR, exist_ok=True)
+    preview_path = os.path.join(_CONFIG_DIR, 'calibration_preview.jpg')
     cv2.imwrite(preview_path, preview)
     print(f"Preview saved: {preview_path}")
 
@@ -402,11 +402,10 @@ def calibrate_camera(rtsp_url, debug=False, show_gui=False):
 
 def save_calibration(rectangle, frame):
     """Save calibration coordinates and empty area reference image."""
-    config_dir = os.path.join(_OCR_DIR, 'test_images')
-    os.makedirs(config_dir, exist_ok=True)
+    os.makedirs(_CONFIG_DIR, exist_ok=True)
 
     # Save coordinates
-    config_file = os.path.join(config_dir, 'loading_area.txt')
+    config_file = os.path.join(_CONFIG_DIR, 'loading_area.txt')
     with open(config_file, 'w') as f:
         f.write(f"{rectangle[0]},{rectangle[1]},{rectangle[2]},{rectangle[3]}\n")
     print(f"Configuration saved: {config_file}")
@@ -414,7 +413,7 @@ def save_calibration(rectangle, frame):
     # Save cropped empty area as reference for false-positive filtering
     x1, y1, x2, y2 = rectangle
     crop = frame[y1:y2, x1:x2]
-    ref_path = os.path.join(config_dir, 'empty_reference.jpg')
+    ref_path = os.path.join(_CONFIG_DIR, 'empty_reference.jpg')
     cv2.imwrite(ref_path, crop)
     print(f"Empty area reference saved: {ref_path}")
 
@@ -482,7 +481,7 @@ def main():
     print("   CALIBRATION COMPLETE")
     print("=" * 70)
     print("\nNext steps:")
-    print("  1. Verify preview: ocr-module/test_images/calibration_preview.jpg")
+    print("  1. Verify preview: config/calibration_preview.jpg")
     print("  2. Run pipeline: python3 app.py")
     print("=" * 70)
 

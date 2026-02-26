@@ -382,7 +382,11 @@ class BookCoverParser:
         self.book_db = None
         if BOOK_DB_AVAILABLE:
             try:
-                db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'books.db')
+                # Look in config/ first, then fall back to ocr-module/
+                _module_dir = os.path.dirname(os.path.abspath(__file__))
+                db_path = os.path.join(_module_dir, '..', 'config', 'books.db')
+                if not os.path.exists(db_path):
+                    db_path = os.path.join(_module_dir, 'books.db')
                 if os.path.exists(db_path):
                     self.book_db = BookDatabase(db_path)
                     if self.debug:
@@ -1186,41 +1190,145 @@ class BookCoverParser:
 
 _ppocr_instance = None
 
-
-def _ppocr_worker(image_path, result_queue):
-    """Worker for subprocess-safe PaddleOCR call."""
-    # Isolate child in its own process group so PaddlePaddle's SIGSEGV
-    # handler cannot kill the parent process group
-    os.setpgrp()
+# Persistent worker script for subprocess-isolated PaddleOCR calls.
+# Loads models ONCE, then processes images in a loop via stdin/stdout.
+_PPOCR_WORKER_SCRIPT = r"""
+import json, os, sys, signal, warnings
+os.setpgrp()
+signal.signal(signal.SIGINT, signal.SIG_IGN)
+warnings.filterwarnings('ignore', category=UserWarning)
+os.environ.setdefault('ORT_LOG_LEVEL', '3')
+os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '3')
+from paddleocr import PaddleOCR
+ocr = PaddleOCR(use_angle_cls=True, lang='latin', use_gpu=False, show_log=False)
+# Signal parent that we are ready
+print("READY", flush=True)
+# Process images in a loop: one path per line on stdin, JSON result on stdout
+for line in sys.stdin:
+    image_path = line.strip()
+    if not image_path:
+        continue
     try:
-        global _ppocr_instance
-        result = _ppocr_instance.ocr(image_path, cls=True)
-        result_queue.put(result)
+        result = ocr.ocr(image_path, cls=True)
+        out = []
+        if result and result[0]:
+            for r in result[0]:
+                bbox = r[0]
+                text = r[1][0]
+                conf = float(r[1][1])
+                out.append({'bbox': bbox, 'text': text, 'conf': conf})
+        print(json.dumps(out), flush=True)
+    except Exception as e:
+        print(json.dumps({"error": str(e)}), flush=True)
+"""
+
+_ppocr_worker_proc = None
+
+
+def _ensure_ppocr_worker():
+    """Start or restart the persistent PaddleOCR worker subprocess."""
+    global _ppocr_worker_proc
+
+    # Check if existing worker is still alive
+    if _ppocr_worker_proc is not None:
+        if _ppocr_worker_proc.poll() is None:
+            return _ppocr_worker_proc
+        # Worker died, clean up
+        _ppocr_worker_proc = None
+
+    # Write worker script to /tmp
+    script_path = '/tmp/_ppocr_worker.py'
+    with open(script_path, 'w') as f:
+        f.write(_PPOCR_WORKER_SCRIPT)
+
+    proc = subprocess.Popen(
+        [sys.executable, script_path],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        text=True, bufsize=1,
+        env={**os.environ, 'ORT_LOG_LEVEL': '3', 'TF_CPP_MIN_LOG_LEVEL': '3'},
+    )
+
+    # Wait for READY signal (model loading)
+    try:
+        ready = proc.stdout.readline().strip()
+        if ready != 'READY':
+            proc.kill()
+            proc.wait()
+            raise RuntimeError(f"Worker did not start properly: {ready}")
     except Exception:
-        result_queue.put(None)
+        proc.kill()
+        proc.wait()
+        raise
+
+    _ppocr_worker_proc = proc
+    return proc
 
 
 def _safe_ppocr_ocr(image_path, timeout=60):
-    """Run PaddleOCR in a forked subprocess to survive C++ segfaults.
-    Returns OCR results or None if the subprocess crashed/timed out."""
-    q = mp.Queue()
-    p = mp.Process(target=_ppocr_worker, args=(image_path, q))
-    p.start()
-    p.join(timeout)
+    """Run PaddleOCR via a persistent worker subprocess.
 
-    if p.is_alive():
-        p.kill()
-        p.join()
-        print(f"\n   ⚠️  PaddleOCR timed out ({timeout}s), skipping")
-        return None
+    The worker loads PaddlePaddle models once and stays alive across calls.
+    If the worker crashes (SIGSEGV), it is automatically restarted on the
+    next call. The parent process is fully isolated (no fork, no shared memory).
+    """
+    import json
 
-    if p.exitcode != 0:
-        print(f"\n   ⚠️  PaddleOCR crashed (exit code {p.exitcode}), skipping")
+    try:
+        worker = _ensure_ppocr_worker()
+    except Exception as e:
+        print(f"\n   ⚠️  PaddleOCR worker failed to start: {e}")
         return None
 
     try:
-        return q.get_nowait()
-    except Exception:
+        # Send image path
+        worker.stdin.write(image_path + '\n')
+        worker.stdin.flush()
+
+        # Read result with timeout
+        import selectors
+        sel = selectors.DefaultSelector()
+        sel.register(worker.stdout, selectors.EVENT_READ)
+        events = sel.select(timeout=timeout)
+        sel.close()
+
+        if not events:
+            print(f"\n   ⚠️  PaddleOCR timed out ({timeout}s), restarting worker")
+            worker.kill()
+            worker.wait()
+            global _ppocr_worker_proc
+            _ppocr_worker_proc = None
+            return None
+
+        line = worker.stdout.readline().strip()
+        if not line:
+            print(f"\n   ⚠️  PaddleOCR worker returned empty response, restarting")
+            worker.kill()
+            worker.wait()
+            _ppocr_worker_proc = None
+            return None
+
+        data = json.loads(line)
+
+        # Check for error response
+        if isinstance(data, dict) and 'error' in data:
+            print(f"\n   ⚠️  PaddleOCR error: {data['error']}")
+            return None
+
+        if not data:
+            return None
+
+        # Reconstruct PaddleOCR-compatible format: [[bbox, (text, conf)], ...]
+        result = []
+        for item in data:
+            result.append([item['bbox'], (item['text'], item['conf'])])
+        return [result]
+
+    except (BrokenPipeError, OSError):
+        print(f"\n   ⚠️  PaddleOCR worker crashed, will restart on next call")
+        _ppocr_worker_proc = None
+        return None
+    except json.JSONDecodeError:
+        print(f"\n   ⚠️  PaddleOCR output parse error, skipping")
         return None
 
 

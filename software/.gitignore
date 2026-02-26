@@ -20,8 +20,9 @@ Thumbs.db
 .vscode/
 *.swp
 
-# Diagnostics output
-diagnostics/crashes/
-diagnostics/thermal_log_*.csv
-diagnostics/thermal_log_*.csv.warnings
-diagnostics/thermal_monitor.pid
+# Diagnostics
+diagnostics/
+
+# Test images
+test_images/
+config/books.db

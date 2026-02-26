@@ -234,17 +234,11 @@ def draw_hourglass(frame, tick=0, progress=None, phase_text=None):
         cv2.putText(frame, pct_text, (cx - pw // 2, cy + ph // 2),
                     FONT, 0.9, (255, 255, 255), 2, AA)
 
-    # Label below hourglass
-    y_label = cy + size + 50
-    text = "SCANNING..."
-    (tw, th), _ = cv2.getTextSize(text, FONT, 1.0, 2)
-    cv2.putText(frame, text, (cx - tw // 2, y_label),
-                FONT, 1.0, (255, 255, 255), 2, AA)
-
-    # Phase text below label
+    # Phase text below hourglass
     if phase_text:
+        y_label = cy + size + 50
         (ptw, pth), _ = cv2.getTextSize(phase_text, FONT, 0.6, 1)
-        cv2.putText(frame, phase_text, (cx - ptw // 2, y_label + 30),
+        cv2.putText(frame, phase_text, (cx - ptw // 2, y_label),
                     FONT, 0.6, (180, 180, 180), 1, AA)
 
 
@@ -382,9 +376,16 @@ def draw_splash(status_text, steps=None):
     cv2.putText(frame, sub, ((w - sw) // 2, sub_y),
                 FONT, 0.7, (120, 120, 120), 1, AA)
 
+    # URL
+    url = "https://denovo.srl"
+    (uw, uh), _ = cv2.getTextSize(url, FONT, 0.5, 1)
+    url_y = sub_y + 28
+    cv2.putText(frame, url, ((w - uw) // 2, url_y),
+                FONT, 0.5, (80, 80, 80), 1, AA)
+
     # Step checklist
     if steps:
-        y_start = sub_y + 50
+        y_start = url_y + 45
         for i, (label, done) in enumerate(steps):
             y = y_start + i * 28
             if done:
@@ -393,7 +394,7 @@ def draw_splash(status_text, steps=None):
             else:
                 mark = "[..]"
                 color = (100, 100, 100)
-            cv2.putText(frame, f"  {mark} {label}", (w // 2 - 160, y),
+            cv2.putText(frame, f"  {mark} {label}", (w // 2 - 140, y),
                         FONT, 0.55, color, 1, AA)
 
     # Current status at bottom (with animated dots)
@@ -436,3 +437,110 @@ def draw_status(frame, text, color=None):
     cv2.rectangle(frame, (5, 5), (15 + tw, 15 + th), (0, 0, 0), -1)
     cv2.putText(frame, text, (10, 10 + th),
                 FONT, 0.8, color, 2, AA)
+
+
+# ---------------------------------------------------------------------------
+# Frame on canvas (aspect-ratio-preserving fit)
+# ---------------------------------------------------------------------------
+
+def frame_on_canvas(crop):
+    """Place crop on a black 1024x600 canvas, preserving aspect ratio, centered."""
+    canvas = np.zeros((SCREEN_H, SCREEN_W, 3), dtype=np.uint8)
+    ch, cw = crop.shape[:2]
+    if ch == 0 or cw == 0:
+        return canvas
+    scale = min(SCREEN_W / cw, SCREEN_H / ch)
+    new_w = int(cw * scale)
+    new_h = int(ch * scale)
+    resized = cv2.resize(crop, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    x_off = (SCREEN_W - new_w) // 2
+    y_off = (SCREEN_H - new_h) // 2
+    canvas[y_off:y_off + new_h, x_off:x_off + new_w] = resized
+    return canvas
+
+
+# ---------------------------------------------------------------------------
+# Diagnostics overlay
+# ---------------------------------------------------------------------------
+
+def draw_diag_overlay(frame, lines):
+    """Draw semi-transparent diagnostics panel at bottom-left of the frame.
+
+    lines: iterable of strings (most recent last).
+    """
+    if not lines:
+        return
+    h, w = frame.shape[:2]
+    font_scale = 1.0
+    line_h = 32
+    max_lines = min(len(lines), 5)
+    panel_h = max_lines * line_h + 28
+    panel_w = 700
+    panel_y = h - panel_h
+
+    # Semi-transparent dark background
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (0, panel_y), (panel_w, h), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+
+    # Draw last N lines, bottom-aligned
+    visible = list(lines)[-max_lines:]
+    y = panel_y + line_h
+    for line in visible:
+        cv2.putText(frame, line[:60], (8, y), FONT, font_scale,
+                    (0, 220, 0), 1, AA)
+        y += line_h
+
+
+# ---------------------------------------------------------------------------
+# Shutdown countdown overlay
+# ---------------------------------------------------------------------------
+
+def draw_shutdown_countdown(frame, remaining_secs):
+    """Draw large centered shutdown countdown on frame."""
+    h, w = frame.shape[:2]
+    # Dark overlay
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+
+    text = f"SHUTDOWN in {remaining_secs}s"
+    (tw, th), _ = cv2.getTextSize(text, FONT, 1.5, 3)
+    cv2.putText(frame, text, ((w - tw) // 2, (h + th) // 2),
+                FONT, 1.5, (0, 0, 255), 3, AA)
+
+    hint = "Show CANCEL QR to abort"
+    (hw, hh), _ = cv2.getTextSize(hint, FONT, 0.7, 1)
+    cv2.putText(frame, hint, ((w - hw) // 2, (h + th) // 2 + 50),
+                FONT, 0.7, (200, 200, 200), 1, AA)
+
+
+# ---------------------------------------------------------------------------
+# Accept / Reject fullscreen feedback
+# ---------------------------------------------------------------------------
+
+def show_accepted(duration=1.5):
+    """Show a large green checkmark fullscreen."""
+    frame = np.zeros((SCREEN_H, SCREEN_W, 3), dtype=np.uint8)
+    cx, cy = SCREEN_W // 2, SCREEN_H // 2
+    # Draw a thick checkmark (V shape)
+    s = 140  # half-size
+    pts = np.array([
+        [cx - s, cy],
+        [cx - s // 3, cy + s * 2 // 3],
+        [cx + s, cy - s * 2 // 3],
+    ], dtype=np.int32)
+    cv2.polylines(frame, [pts], False, (0, 220, 0), 28, AA)
+    show(frame)
+    time.sleep(duration)
+
+
+def show_rejected(duration=1.5):
+    """Show a large red X fullscreen."""
+    frame = np.zeros((SCREEN_H, SCREEN_W, 3), dtype=np.uint8)
+    cx, cy = SCREEN_W // 2, SCREEN_H // 2
+    s = 120  # half-size
+    cv2.line(frame, (cx - s, cy - s), (cx + s, cy + s), (0, 0, 220), 28, AA)
+    cv2.line(frame, (cx + s, cy - s), (cx - s, cy + s), (0, 0, 220), 28, AA)
+    show(frame)
+    time.sleep(duration)

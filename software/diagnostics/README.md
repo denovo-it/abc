@@ -1,45 +1,45 @@
-# Diagnostica crash e monitoraggio termico
+# Crash diagnostics and thermal monitoring
 
-Script per diagnosticare i freeze/crash dell'Orange Pi 5 Plus durante l'uso della pipeline con NPU Metis.
+Scripts for diagnosing freezes/crashes on the Orange Pi 5 Plus during pipeline operation with Metis NPU.
 
-## File
+## Files
 
-| File | Descrizione |
+| File | Description |
 |------|-------------|
-| `collect_crash_info.sh` | Raccoglie log del boot precedente dopo un reboot |
-| `thermal_monitor.sh` | Monitora temperature in background (CSV) |
-| `diagnostics.service` | Unit systemd per raccolta automatica al boot |
+| `collect_crash_info.sh` | Collects logs from previous boot after a reboot |
+| `thermal_monitor.sh` | Monitors temperatures in background (CSV output) |
+| `diagnostics.service` | Systemd unit for automatic collection at boot |
 
-## Uso rapido
+## Quick usage
 
-### Dopo un crash/reboot
+### After a crash/reboot
 
 ```bash
 cd /home/orangepi/abc/software/diagnostics
 ./collect_crash_info.sh
 ```
 
-Crea una cartella `crashes/crash_YYYYMMDD_HHMMSS/` con:
-- `journal_prev_boot.log` — log completo del boot precedente
-- `kernel_prev_boot.log` — solo messaggi kernel del boot precedente
-- `dmesg_current.log` — dmesg del boot corrente
+Creates a `crashes/crash_YYYYMMDD_HHMMSS/` folder with:
+- `journal_prev_boot.log` — full journal from previous boot
+- `kernel_prev_boot.log` — kernel messages only from previous boot
+- `dmesg_current.log` — dmesg from current boot
 
-### Monitoraggio temperature durante la pipeline
+### Temperature monitoring during pipeline
 
 ```bash
 cd /home/orangepi/abc/software/diagnostics
 ./thermal_monitor.sh &
 ```
 
-Genera `thermal_log_YYYYMMDD.csv` con le temperature ogni 5 secondi di tutte e 7 le zone termiche (soc, bigcore0, bigcore1, littlecore, center, gpu, npu).
+Generates `thermal_log_YYYYMMDD.csv` with temperatures every 5 seconds from all 7 thermal zones (soc, bigcore0, bigcore1, littlecore, center, gpu, npu).
 
-Warning automatico se una zona supera 80°C.
+Automatic warning if any zone exceeds 80°C.
 
-Per fermare: `kill $(cat thermal_monitor.pid)`
+To stop: `kill $(cat thermal_monitor.pid)`
 
-### Installazione servizio systemd (opzionale)
+### Systemd service installation (optional)
 
-Per raccogliere automaticamente i log ad ogni boot:
+To automatically collect logs at every boot:
 
 ```bash
 sudo cp diagnostics.service /etc/systemd/system/abc-diagnostics.service
@@ -49,4 +49,4 @@ sudo systemctl enable abc-diagnostics.service
 
 ## Output
 
-I dati raccolti (`crashes/`, `thermal_log_*.csv`) sono esclusi dal repository Git tramite `.gitignore`.
+Collected data (`crashes/`, `thermal_log_*.csv`) is excluded from the Git repository via `.gitignore`.
