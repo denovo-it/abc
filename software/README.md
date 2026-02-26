@@ -66,6 +66,26 @@ Key packages (full list in `tools/requirements.txt`):
 
 ## Setup
 
+### System optimization (recommended)
+
+Disable or remove unnecessary services to free CPU and memory:
+
+```bash
+# Remove crash reporter (can consume 100% CPU on two cores)
+sudo apt remove -y apport apport-gtk
+
+# Remove Bluetooth manager (not needed for headless operation)
+sudo apt remove -y blueman
+
+# Disable unused services
+sudo systemctl disable --now xrdp xrdp-sesman   # Remote desktop
+sudo systemctl disable --now cups                # Print server
+sudo systemctl disable --now kerneloops          # Kernel crash reporter
+sudo systemctl disable --now smartmontools       # Disk SMART monitoring
+```
+
+### Application setup
+
 ```bash
 cd software
 
