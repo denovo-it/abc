@@ -34,6 +34,7 @@ Only one model uses the Metis NPU at a time. Each state releases the device befo
 
 | Module | Path | What is used |
 |--------|------|-------------|
+| **display** | `./display.py` | OpenCV display overlay module (imported by `app.py`) |
 | **tools** | `./tools/` | `scan_books.py` (OCR engine), `display.py` (fullscreen UI), `calibrate.py` (camera calibration), `config.py` (env loader), `setup_database.py` (BookDatabase) |
 | **voyager-sdk** | `./voyager-sdk/` | Axelera SDK framework, GStreamer pipeline, compiled models in `build/` |
 
@@ -47,7 +48,7 @@ Only one model uses the Metis NPU at a time. Each state releases the device befo
 
 ### Python (venv)
 
-Key packages (full list in `tools/requirements.txt`):
+Key packages (full list in `requirements.txt`):
 
 - **paddleocr 2.10.0** + **paddlepaddle 3.2.2** - OCR engine
 - **opencv-python 4.11.0** - Image processing
@@ -124,19 +125,19 @@ Calibration can also be triggered at runtime via the `CALIBRATE` QR code command
 source venv/bin/activate
 
 # Basic: detect book, OCR, auto-accept (no gesture feedback)
-python app.py --no-feedback
+python3 app.py --no-feedback
 
 # Full pipeline with gesture feedback
-python app.py
+python3 app.py
 
 # Hybrid OCR (CPU + Metis ensemble, better accuracy, slower)
-python app.py --ocr-model hybrid --no-feedback
+python3 app.py --ocr-model hybrid --no-feedback
 
 # Italian books only, with color filters for artistic covers
-python app.py --lang it --color-filters --no-feedback
+python3 app.py --lang it --color-filters --no-feedback
 
 # Debug mode (activates diagnostics overlay on screen)
-python app.py --debug --no-feedback
+python3 app.py --debug --no-feedback
 ```
 
 ### CLI options
