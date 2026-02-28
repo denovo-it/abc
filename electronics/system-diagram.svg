@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 620" font-family="'Segoe UI', 'Helvetica Neue', sans-serif">
+  <defs>
+    <filter id="shadow" x="-4%" y="-4%" width="108%" height="112%">
+      <feDropShadow dx="1" dy="2" stdDeviation="3" flood-opacity="0.15"/>
+    </filter>
+    <marker id="arrowGray" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#7a8a9e"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#3b82f6"/>
+    </marker>
+    <marker id="arrowAmber" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#f59e0b"/>
+    </marker>
+    <marker id="arrowRed" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#ef4444"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#22c55e"/>
+    </marker>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="620" rx="16" fill="url(#bgGrad)"/>
+
+  <!-- Title -->
+  <text x="450" y="42" text-anchor="middle" fill="#e2e8f0" font-size="20" font-weight="700" letter-spacing="1.5">SYSTEM ARCHITECTURE</text>
+  <line x1="300" y1="54" x2="600" y2="54" stroke="#334155" stroke-width="1"/>
+
+  <!-- ===== POWER BAR (bottom) ===== -->
+  <rect x="200" y="510" width="500" height="60" rx="10" fill="#1c1917" stroke="#f59e0b" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="450" y="537" text-anchor="middle" fill="#fbbf24" font-size="14" font-weight="700">⚡ POWER BAR</text>
+  <text x="450" y="556" text-anchor="middle" fill="#a3a3a3" font-size="11">AC Power Supply</text>
+  <!-- power outlets dots -->
+  <circle cx="310" cy="545" r="4" fill="#422006" stroke="#f59e0b" stroke-width="1"/>
+  <circle cx="370" cy="545" r="4" fill="#422006" stroke="#f59e0b" stroke-width="1"/>
+  <circle cx="530" cy="545" r="4" fill="#422006" stroke="#f59e0b" stroke-width="1"/>
+  <circle cx="590" cy="545" r="4" fill="#422006" stroke="#f59e0b" stroke-width="1"/>
+
+  <!-- ===== ORANGE PI (center) ===== -->
+  <rect x="280" y="260" width="200" height="110" rx="12" fill="#1e3a5f" stroke="#3b82f6" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="380" y="295" text-anchor="middle" fill="#93c5fd" font-size="15" font-weight="700">ORANGE PI</text>
+  <text x="380" y="315" text-anchor="middle" fill="#64748b" font-size="10">Main SBC</text>
+  <!-- Metis chip on OrangePi -->
+  <rect x="305" y="330" width="150" height="30" rx="6" fill="#312e81" stroke="#818cf8" stroke-width="1" stroke-dasharray="3,2"/>
+  <text x="380" y="350" text-anchor="middle" fill="#a5b4fc" font-size="11" font-weight="600">AXELERA METIS</text>
+
+  <!-- ===== ACCESS POINT (right) ===== -->
+  <rect x="620" y="270" width="180" height="80" rx="12" fill="#1a3329" stroke="#22c55e" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="710" y="305" text-anchor="middle" fill="#86efac" font-size="14" font-weight="700">ACCESS POINT</text>
+  <text x="710" y="323" text-anchor="middle" fill="#64748b" font-size="10">Wi-Fi Bridge</text>
+  <!-- antenna icon -->
+  <line x1="710" y1="265" x2="710" y2="248" stroke="#22c55e" stroke-width="2"/>
+  <path d="M698,252 Q710,240 722,252" fill="none" stroke="#22c55e" stroke-width="1.5"/>
+  <path d="M692,258 Q710,242 728,258" fill="none" stroke="#22c55e" stroke-width="1" opacity="0.5"/>
+
+  <!-- ===== WEBCAM (top) ===== -->
+  <rect x="100" y="90" width="180" height="80" rx="12" fill="#3b1c1c" stroke="#ef4444" stroke-width="1.5" filter="url(#shadow)"/>
+  <!-- camera lens icon -->
+  <circle cx="145" cy="130" r="16" fill="none" stroke="#f87171" stroke-width="1.5"/>
+  <circle cx="145" cy="130" r="8" fill="#7f1d1d" stroke="#f87171" stroke-width="1"/>
+  <text x="220" y="125" text-anchor="middle" fill="#fca5a5" font-size="14" font-weight="700">WEBCAM</text>
+  <text x="220" y="143" text-anchor="middle" fill="#64748b" font-size="10">Wi-Fi Camera</text>
+
+  <!-- ===== MONITOR (left) ===== -->
+  <rect x="60" y="280" width="160" height="100" rx="4" fill="#111827" stroke="#7a8a9e" stroke-width="2" filter="url(#shadow)"/>
+  <rect x="70" y="290" width="140" height="70" rx="2" fill="#1e293b"/>
+  <!-- screen content lines -->
+  <line x1="85" y1="310" x2="170" y2="310" stroke="#475569" stroke-width="2" stroke-linecap="round"/>
+  <line x1="85" y1="320" x2="150" y2="320" stroke="#475569" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="85" y1="330" x2="160" y2="330" stroke="#475569" stroke-width="1.5" stroke-linecap="round"/>
+  <line x1="85" y1="340" x2="140" y2="340" stroke="#475569" stroke-width="1.5" stroke-linecap="round"/>
+  <!-- monitor stand -->
+  <rect x="120" y="380" width="40" height="8" rx="2" fill="#374151"/>
+  <rect x="110" y="386" width="60" height="6" rx="3" fill="#4b5563"/>
+  <text x="140" y="410" text-anchor="middle" fill="#94a3b8" font-size="13" font-weight="600">MONITOR</text>
+
+  <!-- ===== CONNECTIONS ===== -->
+
+  <!-- Ethernet: OrangePi → Access Point -->
+  <line x1="480" y1="310" x2="618" y2="310" stroke="#3b82f6" stroke-width="2.5" marker-end="url(#arrowBlue)"/>
+  <rect x="510" y="296" width="80" height="18" rx="4" fill="#0f172a" stroke="#3b82f6" stroke-width="0.5"/>
+  <text x="550" y="309" text-anchor="middle" fill="#60a5fa" font-size="10" font-weight="600">ETHERNET</text>
+
+  <!-- Wi-Fi: Webcam → Access Point (curved) -->
+  <path d="M280,130 Q500,60 660,270" fill="none" stroke="#22c55e" stroke-width="2" stroke-dasharray="6,4" marker-end="url(#arrowGreen)"/>
+  <rect x="440" y="100" width="56" height="18" rx="4" fill="#0f172a" stroke="#22c55e" stroke-width="0.5"/>
+  <text x="468" y="113" text-anchor="middle" fill="#4ade80" font-size="10" font-weight="600">WI-FI</text>
+
+  <!-- HDMI: Monitor → OrangePi -->
+  <line x1="220" y1="325" x2="278" y2="315" stroke="#7a8a9e" stroke-width="2.5" marker-end="url(#arrowGray)"/>
+  <rect x="220" y="305" width="50" height="18" rx="4" fill="#0f172a" stroke="#7a8a9e" stroke-width="0.5"/>
+  <text x="245" y="318" text-anchor="middle" fill="#94a3b8" font-size="10" font-weight="600">HDMI</text>
+
+  <!-- USB Power: OrangePi → Webcam (for power only) -->
+  <path d="M320,260 Q240,200 230,172" fill="none" stroke="#f59e0b" stroke-width="1.8" stroke-dasharray="4,3" marker-end="url(#arrowAmber)"/>
+  <rect x="225" y="205" width="90" height="18" rx="4" fill="#0f172a" stroke="#f59e0b" stroke-width="0.5"/>
+  <text x="270" y="218" text-anchor="middle" fill="#fbbf24" font-size="9" font-weight="600">USB (PWR only)</text>
+
+  <!-- Power: Bar → OrangePi -->
+  <line x1="380" y1="510" x2="380" y2="372" stroke="#f59e0b" stroke-width="2" marker-end="url(#arrowAmber)"/>
+  <rect x="387" y="440" width="55" height="18" rx="4" fill="#0f172a" stroke="#f59e0b" stroke-width="0.5"/>
+  <text x="414" y="452" text-anchor="middle" fill="#fbbf24" font-size="9" font-weight="600">POWER</text>
+
+  <!-- Power: Bar → Access Point -->
+  <path d="M620,510 L710,352" fill="none" stroke="#f59e0b" stroke-width="2" marker-end="url(#arrowAmber)"/>
+  <rect x="650" y="418" width="55" height="18" rx="4" fill="#0f172a" stroke="#f59e0b" stroke-width="0.5"/>
+  <text x="678" y="430" text-anchor="middle" fill="#fbbf24" font-size="9" font-weight="600">POWER</text>
+
+  <!-- ===== LEGEND ===== -->
+  <rect x="580" y="80" width="280" height="150" rx="10" fill="#0f172a" stroke="#334155" stroke-width="1" opacity="0.9"/>
+  <text x="720" y="103" text-anchor="middle" fill="#cbd5e1" font-size="12" font-weight="700">LEGEND</text>
+  <line x1="600" y1="116" x2="620" y2="116" stroke="#3b82f6" stroke-width="2.5"/>
+  <text x="630" y="120" fill="#94a3b8" font-size="11">Ethernet cable</text>
+  <line x1="600" y1="138" x2="620" y2="138" stroke="#22c55e" stroke-width="2" stroke-dasharray="6,4"/>
+  <text x="630" y="142" fill="#94a3b8" font-size="11">Wi-Fi connection</text>
+  <line x1="600" y1="160" x2="620" y2="160" stroke="#7a8a9e" stroke-width="2.5"/>
+  <text x="630" y="164" fill="#94a3b8" font-size="11">HDMI (video out)</text>
+  <line x1="600" y1="182" x2="620" y2="182" stroke="#f59e0b" stroke-width="2"/>
+  <text x="630" y="186" fill="#94a3b8" font-size="11">Power / USB power</text>
+  <rect x="600" y="196" width="20" height="12" rx="3" fill="#312e81" stroke="#818cf8" stroke-width="1" stroke-dasharray="3,2"/>
+  <text x="630" y="206" fill="#94a3b8" font-size="11">Onboard accelerator</text>
+</svg>
