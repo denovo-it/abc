@@ -34,15 +34,22 @@ of 55M+ titles from Open Library.
 
 ```
 abc/
-  electronics/           # Hardware setup and specifications
-  mechanical/            # Mechanical design (3D printed support)
+  electronics/             # Hardware setup and specifications
+  mechanical/              # Mechanical design (3D printed support)
   software/
-    ocr-module/            # OCR scanning and book identification
-      scan_books.py      # Main scanner with OCR pipeline
-      setup_database.py  # Database management and Open Library import
-      calibrate.py       # Camera calibration (X marker detection)
-      doc/README.md      # Software documentation
-    voyager-sdk/         # Axelera Voyager SDK v1.5.2
+    app.py                 # Main pipeline (detection, OCR, feedback loop)
+    display.py             # OpenCV display overlay module
+    README.md              # Software documentation
+    tools/
+      scan_books.py        # Standalone OCR scanner
+      setup_database.py    # Database management and Open Library import
+      calibrate.py         # Camera calibration (X marker detection)
+      config.py            # Shared configuration and .env loader
+      display.py           # Display overlay module (tools version)
+      start_abc.sh         # Autostart wrapper (waits for X11)
+      record_abc.sh        # Screen recording wrapper
+      doc/README.md        # Tools documentation
+    voyager-sdk/           # Axelera Voyager SDK v1.5.2
 ```
 
 ---
@@ -50,20 +57,23 @@ abc/
 ## Quick Start
 
 ```bash
-cd software/ocr-module
+cd software
 source venv/bin/activate
 
-# Calibrate loading area (one-time)
-python3 calibrate.py
+# Run the full pipeline (detection + OCR + feedback)
+python3 app.py
 
-# Scan books (default: hybrid mode, all languages)
-python3 scan_books.py
+# Calibrate loading area (one-time)
+python3 tools/calibrate.py
+
+# Standalone OCR scan (default: hybrid mode, all languages)
+python3 tools/scan_books.py
 
 # CPU-only mode (no Metis needed)
-python3 scan_books.py --model cpu
+python3 tools/scan_books.py --model cpu
 ```
 
-See [software/ocr-module/doc/README.md](software/ocr-module/doc/README.md) for
+See [software/tools/doc/README.md](software/tools/doc/README.md) for
 detailed usage, OCR models, and troubleshooting.
 
 ---
