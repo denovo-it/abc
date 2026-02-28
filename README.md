@@ -66,6 +66,11 @@ python3 app.py
 # Calibrate loading area (one-time)
 python3 tools/calibrate.py
 
+# Build the book database (one-time)
+python3 tools/setup_database.py download    # Download Open Library dump (~12GB)
+python3 tools/setup_database.py import      # Import into SQLite
+python3 tools/setup_database.py create-fts  # Build full-text search index
+
 # Standalone OCR scan (default: hybrid mode, all languages)
 python3 tools/scan_books.py
 
